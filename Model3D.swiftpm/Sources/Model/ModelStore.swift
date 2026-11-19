@@ -1,96 +1,186 @@
 import Foundation
 import SwiftUI
 
-/// アプリ全体の状態。特徴の履歴を持ち、変更のたびに形状を作り直して保存する
-/// (メインスレッドからだけ使う)
+/// 部品のデータ(フィーチャーの履歴)と、計算した形。メインスレッドからだけ使う
 final class ModelStore: ObservableObject {
-    @Published var features: [Feature] = [] {
-        didSet {
-            save()
-            rebuild()
-        }
+    @Published private(set) var features: [Feature] = []
+    @Published private(set) var partName = "部品1"
+    /// この番号より後のフィーチャーは計算しない(nil なら最後まで)
+    @Published private(set) var rollbackIndex: Int?
+    /// 作成中・編集中のフィーチャー(PropertyManager で確定する前のプレビュー)
+    @Published var preview: PreviewSpec? {
+        didSet { if preview != oldValue { rebuild() } }
     }
-    @Published var selectedID: UUID?
+
     @Published private(set) var mesh = TriMesh()
     @Published private(set) var meshVersion = 0
     @Published private(set) var isBuilding = false
     @Published private(set) var messages: [String] = []
 
+    struct PreviewSpec: Equatable {
+        var feature: Feature
+        /// 置きかえるフィーチャー(編集中のもの、または使うスケッチ)
+        var replacing: UUID?
+    }
+
+    private var undoStack: [ModelData] = []
+    private var redoStack: [ModelData] = []
     private var buildTask: Task<Void, Never>?
     private var buildToken = 0
 
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
     init() {
-        load()
-        if features.isEmpty { features = ModelStore.sample() }
+        if let data = load() {
+            apply(data)
+        } else {
+            apply(ModelData(features: ModelStore.sample()))
+        }
+        rebuild()
+    }
+
+    private var snapshot: ModelData {
+        ModelData(partName: partName, features: features, rollbackIndex: rollbackIndex)
+    }
+
+    private func apply(_ d: ModelData) {
+        partName = d.partName
+        features = d.features
+        rollbackIndex = d.rollbackIndex.flatMap { $0 < d.features.count ? $0 : nil }
+    }
+
+    /// 変更をまとめて行い、元に戻せるようにする
+    private func change(_ body: (inout ModelData) -> Void) {
+        var d = snapshot
+        body(&d)
+        undoStack.append(snapshot)
+        if undoStack.count > 100 { undoStack.removeFirst() }
+        redoStack.removeAll()
+        apply(d)
+        save()
+        rebuild()
+    }
+
+    func undo() {
+        guard let d = undoStack.popLast() else { return }
+        redoStack.append(snapshot)
+        apply(d)
+        save()
+        rebuild()
+    }
+
+    func redo() {
+        guard let d = redoStack.popLast() else { return }
+        undoStack.append(snapshot)
+        apply(d)
+        save()
         rebuild()
     }
 
     // MARK: 編集
 
     func feature(_ id: UUID?) -> Feature? {
-        features.first { $0.id == id }
+        guard let id else { return nil }
+        return features.first { $0.id == id }
     }
 
-    func upsert(_ f: Feature) {
-        if let i = features.firstIndex(where: { $0.id == f.id }) {
-            features[i] = f
-        } else {
-            features.append(f)
+    func index(of id: UUID) -> Int? {
+        features.firstIndex { $0.id == id }
+    }
+
+    func isRolledBack(_ id: UUID) -> Bool {
+        guard let r = rollbackIndex, let i = index(of: id) else { return false }
+        return i >= r
+    }
+
+    /// 追加する。replacing があればその位置に置きかえる(スケッチを押し出しにするとき)
+    func insert(_ f: Feature, replacing: UUID? = nil) {
+        change { d in
+            if let id = replacing, let i = d.features.firstIndex(where: { $0.id == id }) {
+                d.features[i] = f
+            } else if let r = d.rollbackIndex {
+                d.features.insert(f, at: r)
+                d.rollbackIndex = r + 1
+            } else {
+                d.features.append(f)
+            }
         }
-        selectedID = f.id
+    }
+
+    func update(_ f: Feature) {
+        change { d in
+            if let i = d.features.firstIndex(where: { $0.id == f.id }) { d.features[i] = f }
+        }
     }
 
     func delete(_ id: UUID) {
-        features.removeAll { $0.id == id }
-        if selectedID == id { selectedID = nil }
-    }
-
-    func move(_ id: UUID, by delta: Int) {
-        guard let i = features.firstIndex(where: { $0.id == id }) else { return }
-        let j = i + delta
-        guard j >= 0, j < features.count else { return }
-        features.swapAt(i, j)
+        change { d in
+            guard let i = d.features.firstIndex(where: { $0.id == id }) else { return }
+            d.features.remove(at: i)
+            // このフィーチャーのエッジを使っていたフィレットから外す
+            for k in d.features.indices where d.features[k].kind == .fillet {
+                d.features[k].filletEdges.removeAll { $0.featureID == id }
+            }
+            if let r = d.rollbackIndex, i < r { d.rollbackIndex = r - 1 }
+            if let r = d.rollbackIndex, r >= d.features.count { d.rollbackIndex = nil }
+        }
     }
 
     func toggleSuppressed(_ id: UUID) {
-        guard let i = features.firstIndex(where: { $0.id == id }) else { return }
-        features[i].suppressed.toggle()
+        change { d in
+            if let i = d.features.firstIndex(where: { $0.id == id }) { d.features[i].suppressed.toggle() }
+        }
     }
 
-    func newFeature(kind: FeatureKind) -> Feature {
-        let count = features.filter { $0.kind == kind }.count + 1
-        var f = Feature(name: "\(kind.label)\(count)", kind: kind)
-        if kind == .cut {
-            // 引き抜きは、いまの形の上面にスケッチして下へ掘るのを初期値にする
-            f.direction = .reverse
-            if !mesh.bounds.isEmpty {
-                f.sketch.plane.offset = extremeAlongNormal(f.sketch.plane.kind, max: true)
+    func rename(_ id: UUID, to name: String) {
+        change { d in
+            if let i = d.features.firstIndex(where: { $0.id == id }) { d.features[i].name = name }
+        }
+    }
+
+    /// このフィーチャーの直前までロールバック(nil で最後へ)
+    func rollback(before id: UUID?) {
+        change { d in
+            d.rollbackIndex = id.flatMap { id in d.features.firstIndex { $0.id == id } }
+        }
+    }
+
+    func resetToSample() {
+        change { d in d = ModelData(features: ModelStore.sample()) }
+    }
+
+    func newPart() {
+        change { d in d = ModelData() }
+    }
+
+    /// 新しい名前(押し出し3 など)
+    func nextName(_ kind: FeatureKind) -> String {
+        var n = 1
+        let names = Set(features.map(\.name) + features.map(\.sketchName))
+        while names.contains("\(kind.label)\(n)") { n += 1 }
+        return "\(kind.label)\(n)"
+    }
+
+    // MARK: 形の作り直し
+
+    /// 計算に使うフィーチャー(プレビューを入れ、ロールバック位置まで)
+    func featuresForBuild() -> [Feature] {
+        var fs = features
+        var limit = rollbackIndex ?? fs.count
+        if let p = preview {
+            if let id = p.replacing, let i = fs.firstIndex(where: { $0.id == id }) {
+                fs[i] = p.feature
+            } else {
+                fs.insert(p.feature, at: min(limit, fs.count))
+                limit += 1
             }
         }
-        return f
+        return Array(fs.prefix(limit))
     }
-
-    /// いまの形を平面の法線方向に見たときの最大(最小)位置
-    func extremeAlongNormal(_ kind: SketchPlaneKind, max: Bool) -> Double {
-        let n = SketchPlane(kind: kind, offset: 0).normal
-        guard !mesh.positions.isEmpty else { return 0 }
-        var best = max ? -Double.infinity : Double.infinity
-        let b = mesh.bounds
-        for x in [b.min.x, b.max.x] {
-            for y in [b.min.y, b.max.y] {
-                for z in [b.min.z, b.max.z] {
-                    let d = n.dot(Vec3(x, y, z))
-                    best = max ? Swift.max(best, d) : Swift.min(best, d)
-                }
-            }
-        }
-        return (best * 1000).rounded() / 1000
-    }
-
-    // MARK: 形状の作り直し
 
     func rebuild() {
-        let snapshot = features
+        let snapshot = featuresForBuild()
         buildToken += 1
         let token = buildToken
         buildTask?.cancel()
@@ -98,11 +188,11 @@ final class ModelStore: ObservableObject {
         buildTask = Task.detached(priority: .userInitiated) { [weak self] in
             let result = SolidBuilder.build(snapshot)
             guard let store = self else { return }
-            await MainActor.run { store.apply(result, token: token) }
+            await MainActor.run { store.finishBuild(result, token: token) }
         }
     }
 
-    private func apply(_ result: SolidBuilder.Result, token: Int) {
+    private func finishBuild(_ result: SolidBuilder.Result, token: Int) {
         guard token == buildToken else { return }
         mesh = result.mesh
         messages = result.messages
@@ -114,66 +204,62 @@ final class ModelStore: ObservableObject {
 
     private var fileURL: URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent("model.json")
+        return dir.appendingPathComponent("part.json")
     }
 
     private func save() {
         do {
-            let data = try JSONEncoder().encode(ModelData(features: features))
+            let data = try JSONEncoder().encode(snapshot)
             try data.write(to: fileURL, options: .atomic)
         } catch {
             print("保存に失敗: \(error)")
         }
     }
 
-    private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let model = try? JSONDecoder().decode(ModelData.self, from: data) else { return }
-        features = model.features
+    private func load() -> ModelData? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return try? JSONDecoder().decode(ModelData.self, from: data)
     }
 
-    func resetToSample() {
-        selectedID = nil
-        features = ModelStore.sample()
-    }
+    // MARK: 見本
 
-    func clearAll() {
-        selectedID = nil
-        features = []
-    }
-
-    /// 最初に表示する見本: 角Rの板 → 丸穴の引き抜き(入口R) → 上面フィレット付きのボス
+    /// 角Rの板 → ボス → 貫通穴 → ポケット → フィレット
     static func sample() -> [Feature] {
+        let top = RefPlane.top.plane
+
+        var s1 = SketchShape.rectangle(Vec2(-40, -25), Vec2(40, 25))
+        s1.setAllRadii(8)
         var base = Feature(name: "押し出し1", kind: .extrude)
-        var rect = SketchShape.rectangle(Vec2(-40, -25), Vec2(40, 25))
-        rect.setAllRadii(8)
-        base.sketch.shapes = [rect]
+        base.sketchName = "スケッチ1"
+        base.sketch = Sketch(plane: top, shapes: [s1])
         base.distance = 12
-        base.endFillet = 2
 
+        let face12 = SketchPlane.from(normal: Vec3(0, 1, 0), through: Vec3(0, 12, 0), name: "面")
         var boss = Feature(name: "押し出し2", kind: .extrude)
-        boss.sketch.plane.offset = 12
-        boss.sketch.shapes = [.circle(center: Vec2(-15, 0), radius: 12)]
+        boss.sketchName = "スケッチ2"
+        boss.sketch = Sketch(plane: face12, shapes: [.circle(center: Vec2(-15, 0), radius: 12)])
         boss.distance = 15
-        boss.endFillet = 3
 
-        var hole = Feature(name: "引き抜き1", kind: .cut)
-        hole.sketch.plane.offset = 27
-        hole.direction = .reverse
-        hole.throughAll = true
-        hole.startFillet = 1.5
-        hole.sketch.shapes = [.circle(center: Vec2(-15, 0), radius: 5)]
+        let face27 = SketchPlane.from(normal: Vec3(0, 1, 0), through: Vec3(0, 27, 0), name: "面")
+        var hole = Feature(name: "押し出しカット1", kind: .cut)
+        hole.sketchName = "スケッチ3"
+        hole.sketch = Sketch(plane: face27, shapes: [.circle(center: Vec2(-15, 0), radius: 5)])
+        hole.endCondition = .throughAll
+        hole.reversed = true
 
-        var pocket = Feature(name: "引き抜き2", kind: .cut)
-        pocket.sketch.plane.offset = 12
-        pocket.direction = .reverse
-        pocket.distance = 6
-        pocket.endFillet = 2
         var slot = SketchShape.rectangle(Vec2(8, -12), Vec2(30, 12))
         slot.setAllRadii(4)
-        pocket.sketch.shapes = [slot]
+        var pocket = Feature(name: "押し出しカット2", kind: .cut)
+        pocket.sketchName = "スケッチ4"
+        pocket.sketch = Sketch(plane: face12, shapes: [slot])
+        pocket.distance = 6
+        pocket.reversed = true
 
-        return [base, boss, hole, pocket]
+        var fillet = Feature(name: "フィレット1", kind: .fillet)
+        fillet.filletRadius = 2
+        fillet.filletEdges = [.end(base.id), .end(boss.id), .start(hole.id), .end(pocket.id)]
+
+        return [base, boss, hole, pocket, fillet]
     }
 }
 
@@ -198,9 +284,9 @@ enum STLExporter {
         return d
     }
 
-    static func writeTemporary(_ mesh: TriMesh) throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Model3D.stl")
-        try data(from: mesh).write(to: url, options: .atomic)
+    static func writeTemporary(_ mesh: TriMesh, name: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).stl")
+        try data(from: mesh, name: name).write(to: url, options: .atomic)
         return url
     }
 

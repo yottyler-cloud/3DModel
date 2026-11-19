@@ -1,67 +1,5 @@
 import SwiftUI
 
-enum SketchTool: String, CaseIterable, Identifiable {
-    case select, rectangle, circle, polygon, fillet
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .select: return "選択・移動"
-        case .rectangle: return "長方形"
-        case .circle: return "円"
-        case .polygon: return "多角形"
-        case .fillet: return "角R"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .select: return "cursorarrow"
-        case .rectangle: return "rectangle"
-        case .circle: return "circle"
-        case .polygon: return "pentagon"
-        case .fillet: return "square.on.circle"
-        }
-    }
-
-    var hint: String {
-        switch self {
-        case .select: return "図形をタップで選択、ドラッグで移動"
-        case .rectangle: return "対角へドラッグして長方形"
-        case .circle: return "中心から外へドラッグして円"
-        case .polygon: return "頂点を順にタップ。最初の点をタップで閉じる"
-        case .fillet: return "角をタップしてRをつける(もう一度で外す)"
-        }
-    }
-}
-
-/// スケッチ画面の表示倍率と位置
-struct SketchViewport {
-    var scale: CGFloat
-    var origin: CGPoint
-
-    func toScreen(_ p: Vec2) -> CGPoint {
-        CGPoint(x: origin.x + CGFloat(p.x) * scale, y: origin.y - CGFloat(p.y) * scale)
-    }
-
-    func toWorld(_ s: CGPoint) -> Vec2 {
-        Vec2(Double((s.x - origin.x) / scale), Double((origin.y - s.y) / scale))
-    }
-
-    /// 画面上でおよそ12pt以上になる細かい格子の間隔(mm)
-    var gridStep: Double {
-        let steps: [Double] = [0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000]
-        for s in steps where CGFloat(s) * scale >= 12 { return s }
-        return 1000
-    }
-
-    var majorStep: Double {
-        let s = gridStep
-        let mantissa = s / pow(10, floor(log10(s)))
-        return mantissa < 2 ? s * 10 : s * 2
-    }
-}
-
 /// スケッチの描画内容
 struct SketchDrawing {
     var shapes: [SketchShape]
@@ -86,10 +24,10 @@ struct SketchDrawing {
         // 図形(偶奇で塗ると、内側の図形が穴に見える)
         var all = Path()
         for s in shapes where s.isValid { all.addPath(path(s, vp)) }
-        ctx.fill(all, with: .color(.accentColor.opacity(0.12)), style: FillStyle(eoFill: true))
+        ctx.fill(all, with: .color(.accentColor.opacity(0.10)), style: FillStyle(eoFill: true))
         for s in shapes where s.isValid {
             let selected = s.id == selection
-            ctx.stroke(path(s, vp), with: .color(selected ? .orange : .accentColor),
+            ctx.stroke(path(s, vp), with: .color(selected ? .orange : .blue),
                        lineWidth: selected ? 2.5 : 1.6)
             drawLabels(&ctx, s, vp: vp)
         }
@@ -192,8 +130,8 @@ struct SketchDrawing {
             if isMajor { majorPath = p } else { minorPath = p }
             y += step
         }
-        ctx.stroke(minorPath, with: .color(.gray.opacity(0.12)), lineWidth: 0.5)
-        ctx.stroke(majorPath, with: .color(.gray.opacity(0.28)), lineWidth: 0.8)
+        ctx.stroke(minorPath, with: .color(.gray.opacity(0.10)), lineWidth: 0.5)
+        ctx.stroke(majorPath, with: .color(.gray.opacity(0.22)), lineWidth: 0.8)
 
         let o = vp.toScreen(.zero)
         var ax = Path(); ax.move(to: CGPoint(x: 0, y: o.y)); ax.addLine(to: CGPoint(x: size.width, y: o.y))

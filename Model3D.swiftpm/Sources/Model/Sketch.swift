@@ -1,53 +1,67 @@
 import Foundation
 
-/// スケッチを描く平面
-enum SketchPlaneKind: String, Codable, CaseIterable, Identifiable {
-    case xy, xz, yz
+/// 基準の3平面(Y が上)
+enum RefPlane: String, Codable, CaseIterable, Identifiable {
+    case front, top, right
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .xy: return "XY 平面(上)"
-        case .xz: return "XZ 平面(正面)"
-        case .yz: return "YZ 平面(右側面)"
+        case .front: return "正面"
+        case .top: return "平面"
+        case .right: return "右側面"
         }
     }
 
-    var axisLabels: (String, String) {
+    var plane: SketchPlane {
         switch self {
-        case .xy: return ("X", "Y")
-        case .xz: return ("X", "Z")
-        case .yz: return ("Y", "Z")
+        case .front: return .from(normal: Vec3(0, 0, 1), through: .zero, name: label)
+        case .top: return .from(normal: Vec3(0, 1, 0), through: .zero, name: label)
+        case .right: return .from(normal: Vec3(1, 0, 0), through: .zero, name: label)
         }
     }
 }
 
+/// スケッチを描く平面(原点と、横 u・縦 v の向き。法線は u × v)
 struct SketchPlane: Codable, Hashable {
-    var kind: SketchPlaneKind = .xy
-    /// 法線方向へのずらし量(mm)
-    var offset: Double = 0
+    var origin: Vec3
+    var u: Vec3
+    var v: Vec3
+    var name: String
 
-    /// スケッチの横方向
-    var u: Vec3 {
-        switch kind {
-        case .xy: return Vec3(1, 0, 0)
-        case .xz: return Vec3(1, 0, 0)
-        case .yz: return Vec3(0, 1, 0)
-        }
-    }
-    /// スケッチの縦方向
-    var v: Vec3 {
-        switch kind {
-        case .xy: return Vec3(0, 1, 0)
-        case .xz: return Vec3(0, 0, 1)
-        case .yz: return Vec3(0, 0, 1)
-        }
-    }
-    /// 押し出しの向き(u × v)
     var normal: Vec3 { u.cross(v) }
 
+    /// 法線と通る点から平面をつくる。横・縦の向きは、上から見た面なら X と -Z、
+    /// それ以外は「上(Y)が縦」になるように決める
+    static func from(normal n0: Vec3, through p: Vec3, name: String) -> SketchPlane {
+        let n = n0.normalized
+        var v: Vec3
+        if abs(n.y) > 0.9 {
+            v = n.y > 0 ? Vec3(0, 0, -1) : Vec3(0, 0, 1)
+        } else {
+            v = Vec3(0, 1, 0)
+        }
+        v = (v - n * v.dot(n)).normalized
+        let u = v.cross(n).normalized
+        return SketchPlane(origin: n * n.dot(p), u: u, v: v, name: name)
+    }
+
+    /// 平面上の2D座標 → 3D(h は法線方向の高さ)
     func point(_ p: Vec2, height h: Double = 0) -> Vec3 {
-        normal * (offset + h) + u * p.x + v * p.y
+        origin + u * p.x + v * p.y + normal * h
+    }
+
+    /// 3D → 平面上の2D座標
+    func project(_ p: Vec3) -> Vec2 {
+        let d = p - origin
+        return Vec2(d.dot(u), d.dot(v))
+    }
+
+    /// 平面からの符号付き距離
+    func distance(_ p: Vec3) -> Double { (p - origin).dot(normal) }
+
+    func isCoplanar(with o: SketchPlane) -> Bool {
+        normal.dot(o.normal) > 0.9999 && abs(distance(o.origin)) < 1e-5
     }
 }
 
@@ -80,6 +94,11 @@ struct SketchShape: Codable, Identifiable, Hashable {
 
     static func circle(center: Vec2, radius: Double) -> SketchShape {
         SketchShape(kind: .circle, points: [center], radius: radius)
+    }
+
+    static func centerRectangle(center c: Vec2, corner: Vec2) -> SketchShape {
+        let d = Vec2(abs(corner.x - c.x), abs(corner.y - c.y))
+        return .rectangle(c - d, c + d)
     }
 
     static func polygon(_ pts: [Vec2]) -> SketchShape {
@@ -246,6 +265,6 @@ enum ProfileGeometry {
 }
 
 struct Sketch: Codable, Hashable {
-    var plane = SketchPlane()
+    var plane = RefPlane.top.plane
     var shapes: [SketchShape] = []
 }

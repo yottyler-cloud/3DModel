@@ -1,6 +1,6 @@
 import Foundation
 
-/// 特徴(Feature)の履歴からソリッドをつくる
+/// フィーチャーの履歴からソリッドをつくる
 enum SolidBuilder {
     /// フィレット部分の段数
     static let filletSteps = 6
@@ -14,7 +14,7 @@ enum SolidBuilder {
     static func build(_ features: [Feature]) -> Result {
         var solid = Solid.empty
         var messages: [String] = []
-        for f in features where !f.suppressed {
+        for f in effective(features) {
             let shapes = f.sketch.shapes.filter { $0.isValid }
             if shapes.isEmpty {
                 messages.append("「\(f.name)」: スケッチに閉じた図形がありません")
@@ -23,25 +23,54 @@ enum SolidBuilder {
             let tool = toolSolid(for: f, shapes: shapes)
             switch f.kind {
             case .extrude: solid = solid.union(tool)
-            case .cut: solid = solid.subtract(tool)
+            case .cut:
+                if solid.isEmpty { messages.append("「\(f.name)」: 削る形がまだありません") }
+                solid = solid.subtract(tool)
+            default: break
             }
         }
         return Result(mesh: TriMesh(solid: solid), messages: messages)
     }
 
-    /// 押し出し・引き抜きの範囲(スケッチ面からの高さ)
-    static func extent(of f: Feature) -> (h0: Double, h1: Double, sketchAtBottom: Bool) {
-        let d = (f.kind == .cut && f.throughAll) ? throughAllDistance : max(f.distance, 0.001)
-        switch f.direction {
-        case .normal: return (0, d, true)
-        case .reverse: return (-d, 0, false)
-        case .symmetric: return (-d / 2, d / 2, true)
+    /// フィレット特徴の指定を、対象の押し出し・カットの値に反映した一覧(押し出しとカットだけ)
+    static func effective(_ features: [Feature]) -> [Feature] {
+        var fs = features.filter { !$0.suppressed }
+        for f in fs where f.kind == .fillet {
+            let r = max(0, f.filletRadius)
+            for e in f.filletEdges {
+                guard let i = fs.firstIndex(where: { $0.id == e.featureID }) else { continue }
+                switch e {
+                case .start:
+                    fs[i].startFillet = max(fs[i].startFillet, r)
+                case .end:
+                    fs[i].endFillet = max(fs[i].endFillet, r)
+                case .corner(_, let shapeID, let k):
+                    if let j = fs[i].sketch.shapes.firstIndex(where: { $0.id == shapeID }) {
+                        let cur = fs[i].sketch.shapes[j].radius(at: k)
+                        fs[i].sketch.shapes[j].setRadius(max(cur, r), at: k)
+                    }
+                }
+            }
         }
+        return fs.filter { $0.kind == .extrude || $0.kind == .cut }
     }
 
-    /// その特徴が足す(または削る)形
-    static func toolSolid(for f: Feature, shapes: [SketchShape]) -> Solid {
-        // 何重に囲まれているかで「外形」か「穴」かを決める(偶数: 外形, 奇数: 穴)
+    /// 押し出し・カットの範囲(スケッチ面からの高さ)
+    static func extent(of f: Feature) -> (h0: Double, h1: Double, sketchAtBottom: Bool) {
+        let through = f.kind == .cut && f.endCondition == .throughAll
+        let d = through ? throughAllDistance : max(f.distance, 0.001)
+        var r: (Double, Double, Bool)
+        if f.endCondition == .midPlane {
+            r = (-d / 2, d / 2, true)
+        } else {
+            r = f.reversed ? (-d, 0, false) : (0, d, true)
+        }
+        let off = f.useStartOffset ? f.startOffset : 0
+        return (r.0 + off, r.1 + off, r.2)
+    }
+
+    /// 図形ごとに「外形」か「穴」かを決める(何重に囲まれているか: 偶数で外形)
+    static func nestingDepth(_ shapes: [SketchShape]) -> [Int] {
         let outlines = shapes.map { ProfileGeometry.outline($0) }
         var depth = Array(repeating: 0, count: shapes.count)
         for i in shapes.indices {
@@ -50,31 +79,34 @@ enum SolidBuilder {
                 if Polygon2D.contains(outlines[j], p) { depth[i] += 1 }
             }
         }
+        return depth
+    }
 
+    /// その特徴が足す(または削る)形
+    static func toolSolid(for f: Feature, shapes: [SketchShape]) -> Solid {
+        let depth = nestingDepth(shapes)
         let (h0, h1, sketchAtBottom) = extent(of: f)
+        let isMid = f.endCondition == .midPlane
         // フィレットを下端(h0)・上端(h1)へ割り当てる
         let startR = f.startFillet, endR = f.endFillet
         var bottomR = sketchAtBottom ? startR : endR
         var topR = sketchAtBottom ? endR : startR
-        if f.direction == .symmetric {
-            // 両側対称のときは両端とも「先端」
+        if isMid {
+            // 中間平面のときは両端とも「先端」
             bottomR = endR
             topR = endR
         }
-        // 引き抜き: スケッチ面側(入口)のエッジは凸 → 道具を外へ広げる。先端(底)は道具を内へ丸める
+        // カット: 入口(スケッチ面側)のふちは凸 → 道具を外へ広げる。先端(底)は道具を内へ丸める
         let isCut = f.kind == .cut
-        let bottomIsEntry = isCut && sketchAtBottom && f.direction != .symmetric
+        let bottomIsEntry = isCut && sketchAtBottom && !isMid
         let topIsEntry = isCut && !sketchAtBottom
-        let throughAll = isCut && f.throughAll
+        let throughAll = isCut && f.endCondition == .throughAll
 
         var body = Solid.empty
         var holes = Solid.empty
+        let ext = 0.01
         for i in shapes.indices {
-            let isOuter = depth[i] % 2 == 0
-            if isOuter {
-                // 外形
-                let bFlare = isCut ? bottomIsEntry : false
-                let tFlare = isCut ? topIsEntry : false
+            if depth[i] % 2 == 0 {
                 var bR = bottomR, tR = topR
                 if throughAll {
                     // 貫通する側の先端は丸めない
@@ -83,20 +115,19 @@ enum SolidBuilder {
                 }
                 body = body.union(Solid(polygons: prism(
                     shape: shapes[i], plane: f.sketch.plane, h0: h0, h1: h1,
-                    bottomR: bR, topR: tR, bottomFlare: bFlare, topFlare: tFlare)))
+                    bottomR: bR, topR: tR,
+                    bottomFlare: isCut && bottomIsEntry, topFlare: isCut && topIsEntry)))
+            } else if isCut {
+                // カットの中の島
+                holes = holes.union(Solid(polygons: prism(
+                    shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
+                    bottomR: 0, topR: 0, bottomFlare: false, topFlare: false)))
             } else {
-                // 穴(押し出しの中の穴は外へ広げて、入口のエッジを丸める)
-                let ext = 0.01
-                if isCut {
-                    holes = holes.union(Solid(polygons: prism(
-                        shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
-                        bottomR: 0, topR: 0, bottomFlare: false, topFlare: false)))
-                } else {
-                    holes = holes.union(Solid(polygons: prism(
-                        shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
-                        bottomR: bottomR > 0 ? bottomR + ext : 0, topR: topR > 0 ? topR + ext : 0,
-                        bottomFlare: true, topFlare: true)))
-                }
+                // 押し出しの中の穴(外へ広げた道具で、穴の入口のふちも丸める)
+                holes = holes.union(Solid(polygons: prism(
+                    shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
+                    bottomR: bottomR > 0 ? bottomR + ext : 0, topR: topR > 0 ? topR + ext : 0,
+                    bottomFlare: true, topFlare: true)))
             }
         }
         return body.subtract(holes)
@@ -158,7 +189,7 @@ enum SolidBuilder {
                 addTri(lower[i], upper[j], upper[i])
             }
         }
-        // ふた(上下の面)
+        // ふた(両端の面)
         for (index, isTop) in [(0, false), (rings.count - 1, true)] {
             let ring = rings[index]
             let pts2 = Polygon2D.dedupe(ProfileGeometry.outline(shape, inset: ring.inset))
@@ -184,61 +215,5 @@ enum SolidBuilder {
             tries += 1
         }
         return tries >= 40 ? 0 : r
-    }
-}
-
-/// 描画・書き出し用の三角形メッシュ(3頂点ずつ)
-struct TriMesh {
-    var positions: [Vec3] = []
-    var normals: [Vec3] = []
-    var bounds = Box3()
-
-    var triangleCount: Int { positions.count / 3 }
-
-    init() {}
-
-    init(solid: Solid) {
-        var tris: [(Vec3, Vec3, Vec3)] = []
-        for p in solid.polygons where p.vertices.count >= 3 {
-            for k in 1..<(p.vertices.count - 1) {
-                tris.append((p.vertices[0], p.vertices[k], p.vertices[k + 1]))
-            }
-        }
-        // 面の法線と面積
-        var faceN: [Vec3] = []
-        var keep: [(Vec3, Vec3, Vec3)] = []
-        for t in tris {
-            let c = (t.1 - t.0).cross(t.2 - t.0)
-            if c.length < 1e-12 { continue }
-            keep.append(t)
-            faceN.append(c) // 長さ = 面積×2(面積の重み)
-        }
-        // 同じ位置の頂点を集めて、なめらかな面は法線を平均する(角度40°以上は折れ目)
-        let q = 1e-4
-        func key(_ v: Vec3) -> SIMD3<Int64> {
-            SIMD3(Int64((v.x / q).rounded()), Int64((v.y / q).rounded()), Int64((v.z / q).rounded()))
-        }
-        var groups: [SIMD3<Int64>: [Int]] = [:]
-        for (i, t) in keep.enumerated() {
-            groups[key(t.0), default: []].append(i)
-            groups[key(t.1), default: []].append(i)
-            groups[key(t.2), default: []].append(i)
-        }
-        let crease = cos(40.0 * Double.pi / 180)
-        positions.reserveCapacity(keep.count * 3)
-        normals.reserveCapacity(keep.count * 3)
-        for (i, t) in keep.enumerated() {
-            let ni = faceN[i].normalized
-            for v in [t.0, t.1, t.2] {
-                var sum = Vec3.zero
-                for j in groups[key(v)] ?? [] {
-                    if faceN[j].normalized.dot(ni) >= crease { sum = sum + faceN[j] }
-                }
-                let n = sum.length > 0 ? sum.normalized : ni
-                positions.append(v)
-                normals.append(n)
-                bounds.add(v)
-            }
-        }
     }
 }

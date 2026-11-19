@@ -1,67 +1,105 @@
 import Foundation
 
 enum FeatureKind: String, Codable {
-    case extrude, cut
+    case sketch, extrude, cut, fillet
 
     var label: String {
         switch self {
+        case .sketch: return "スケッチ"
         case .extrude: return "押し出し"
-        case .cut: return "引き抜き"
+        case .cut: return "押し出しカット"
+        case .fillet: return "フィレット"
         }
     }
 
     var symbol: String {
         switch self {
+        case .sketch: return "pencil.and.outline"
         case .extrude: return "square.stack.3d.up.fill"
         case .cut: return "square.stack.3d.down.dottedline"
+        case .fillet: return "app.connected.to.app.below.fill"
         }
     }
 }
 
-enum ExtentDirection: String, Codable, CaseIterable, Identifiable {
-    case normal, reverse, symmetric
+/// 押し出しの終わり方
+enum EndCondition: String, Codable, CaseIterable, Identifiable {
+    case blind, throughAll, midPlane
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .normal: return "法線方向"
-        case .reverse: return "反対方向"
-        case .symmetric: return "両側対称"
+        case .blind: return "ブラインド(距離指定)"
+        case .throughAll: return "全貫通"
+        case .midPlane: return "中間平面(両側)"
         }
     }
 }
 
-/// 形状をつくる1手順(履歴の1行)
+/// フィレットで選んだエッジ。どの特徴の、どの部分のエッジかで覚える
+enum EdgeRef: Codable, Hashable {
+    /// スケッチ面側のふち
+    case start(UUID)
+    /// 先端側のふち(カットなら底のすみ)
+    case end(UUID)
+    /// 図形の角から伸びるエッジ(特徴, 図形, 角の番号)
+    case corner(UUID, UUID, Int)
+
+    var featureID: UUID {
+        switch self {
+        case .start(let id), .end(let id), .corner(let id, _, _): return id
+        }
+    }
+}
+
+/// フィーチャーツリーの1行
 struct Feature: Codable, Identifiable, Hashable {
     var id = UUID()
     var name: String
     var kind: FeatureKind
     var sketch = Sketch()
-    /// 押し出し・引き抜きの距離(mm)
+    /// 押し出し・カットに使ったスケッチの名前
+    var sketchName = ""
+
+    // 押し出し・カット
     var distance: Double = 10
-    var direction: ExtentDirection = .normal
-    /// 引き抜きを全体に貫通させる
-    var throughAll = false
-    /// スケッチ面側のエッジのフィレット半径
+    var endCondition: EndCondition = .blind
+    var reversed = false
+    var useStartOffset = false
+    var startOffset: Double = 0
+    /// フィレット特徴から計算時に入る値(直接は編集しない)
     var startFillet: Double = 0
-    /// 先端側のエッジのフィレット半径
     var endFillet: Double = 0
-    /// 一時的に無効にする
+
+    // フィレット
+    var filletRadius: Double = 3
+    var filletEdges: [EdgeRef] = []
+
     var suppressed = false
 
+    var hasSketch: Bool { kind != .fillet }
+
     var summary: String {
-        var s = "\(kind.label) "
-        s += throughAll && kind == .cut ? "貫通" : "\(Format.mm(distance))"
-        if startFillet > 0 || endFillet > 0 {
-            s += "  R\(Format.mm(startFillet))/R\(Format.mm(endFillet))"
+        switch kind {
+        case .sketch:
+            return "\(sketch.plane.name) / 図形 \(sketch.shapes.count)"
+        case .extrude, .cut:
+            switch endCondition {
+            case .throughAll where kind == .cut: return "全貫通"
+            case .midPlane: return "中間平面 \(Format.mm(distance)) mm"
+            default: return "\(Format.mm(distance)) mm\(reversed ? " 反対" : "")"
+            }
+        case .fillet:
+            return "R\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"
         }
-        return s
     }
 }
 
-/// モデル全体(保存されるもの)
+/// 保存されるモデル全体
 struct ModelData: Codable {
+    var partName = "部品1"
     var features: [Feature] = []
+    var rollbackIndex: Int?
 }
 
 enum Format {

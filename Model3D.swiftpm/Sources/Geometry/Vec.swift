@@ -31,8 +31,8 @@ struct Vec2: Codable, Hashable {
     func distance(to b: Vec2) -> Double { (self - b).length }
 }
 
-/// 3次元ベクトル(モデル座標, Z が上, 単位mm)
-struct Vec3: Hashable {
+/// 3次元ベクトル(モデル座標, Y が上, 単位mm)
+struct Vec3: Codable, Hashable {
     var x: Double
     var y: Double
     var z: Double
