@@ -1,7 +1,10 @@
 import Foundation
 
 enum FeatureKind: String, Codable {
-    case sketch, extrude, cut, fillet, chamfer, revolve, revolveCut
+    case sketch, extrude, cut, fillet, chamfer, revolve, revolveCut, shell
+
+    /// スケッチを使わず、ほかのフィーチャーの形を変えるもの(フィレット・面取り・シェル)
+    var isModifier: Bool { isEdgeFeature || self == .shell }
 
     /// 回転(中心線を軸にスケッチを回す)
     var isRevolve: Bool { self == .revolve || self == .revolveCut }
@@ -24,6 +27,7 @@ enum FeatureKind: String, Codable {
         case .chamfer: return "面取り"
         case .revolve: return "回転"
         case .revolveCut: return "回転カット"
+        case .shell: return "シェル"
         }
     }
 
@@ -36,6 +40,7 @@ enum FeatureKind: String, Codable {
         case .chamfer: return "righttriangle"
         case .revolve: return "arrow.triangle.2.circlepath"
         case .revolveCut: return "arrow.triangle.2.circlepath.circle"
+        case .shell: return "shippingbox"
         }
     }
 }
@@ -126,7 +131,7 @@ struct Feature: Codable, Identifiable, Hashable {
         set { merge = newValue }
     }
 
-    var hasSketch: Bool { !kind.isEdgeFeature }
+    var hasSketch: Bool { !kind.isModifier }
 
     var summary: String {
         switch kind {
@@ -148,6 +153,8 @@ struct Feature: Codable, Identifiable, Hashable {
             return "R\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"
         case .chamfer:
             return "C\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"
+        case .shell:
+            return "厚み \(Format.mm(filletRadius)) mm  開口 \(filletEdges.count)"
         }
     }
 }

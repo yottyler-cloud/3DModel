@@ -10,7 +10,7 @@ struct FeatureTree: View {
     var body: some View {
         List {
             Label(store.partName, systemImage: "cube")
-                .font(.headline)
+                .font(.subheadline.bold())
 
             ForEach(RefPlane.allCases) { p in
                 row(selected: editor.selection == .refPlane(p)) {
@@ -35,6 +35,7 @@ struct FeatureTree: View {
             if store.rollbackIndex == nil { rollbackBar }
         }
         .listStyle(.sidebar)
+        .environment(\.defaultMinListRowHeight, 28)
         .alert("名前の変更", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("名前", text: $newName)
             Button("OK") {
@@ -130,7 +131,8 @@ struct FeatureTree: View {
             HStack(spacing: 8) {
                 Image(systemName: f.kind.symbol)
                     .foregroundStyle(iconColor(f.kind))
-                    .frame(width: 22)
+                    .font(.footnote)
+                    .frame(width: 18)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(f.name).strikethrough(f.suppressed)
                     Text(f.summary).font(.caption2).foregroundStyle(.secondary)
@@ -159,12 +161,14 @@ struct FeatureTree: View {
         case .chamfer: return .purple
         case .revolve: return .teal
         case .revolveCut: return .red
+        case .shell: return .indigo
         }
     }
 
     private func row<Content: View>(selected: Bool, @ViewBuilder content: () -> Content,
                                     onTap: @escaping () -> Void) -> some View {
         content()
+            .padding(.vertical, -3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onTapGesture(perform: onTap)

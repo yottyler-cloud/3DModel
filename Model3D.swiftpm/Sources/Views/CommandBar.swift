@@ -12,7 +12,7 @@ struct CommandBar: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     if editor.tab == .features { featureCommands } else { sketchCommands }
                 }
-                Divider().frame(height: 44)
+                Divider().frame(height: 36)
                 documentCommands
             }
             .padding(.horizontal, 8)
@@ -23,9 +23,9 @@ struct CommandBar: View {
                         editor.tab = t
                     } label: {
                         Text(t.label)
-                            .font(.footnote.weight(editor.tab == t ? .bold : .regular))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 5)
+                            .font(.caption.weight(editor.tab == t ? .bold : .regular))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 3)
                             .background(editor.tab == t ? Color(uiColor: .systemBackground) : Color.clear)
                             .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
@@ -76,7 +76,11 @@ struct CommandBar: View {
                           active: editor.session?.draft.kind == .chamfer) {
                 editor.edgeFeatureButton(.chamfer)
             }
-            Divider().frame(height: 44).padding(.horizontal, 4)
+            CommandButton(title: "シェル", symbol: FeatureKind.shell.symbol,
+                          active: editor.session?.draft.kind == .shell) {
+                editor.shellButton()
+            }
+            Divider().frame(height: 34).padding(.horizontal, 2)
             CommandButton(title: editor.sketch == nil ? "スケッチ" : "スケッチ終了",
                           symbol: editor.sketch == nil ? "pencil.and.outline" : "rectangle.portrait.and.arrow.right",
                           active: editor.sketch != nil) {
@@ -92,7 +96,7 @@ struct CommandBar: View {
                           active: editor.sketch != nil) {
                 editor.sketchButton()
             }
-            Divider().frame(height: 44).padding(.horizontal, 4)
+            Divider().frame(height: 34).padding(.horizontal, 2)
             ForEach(SketchTool.allCases) { t in
                 CommandButton(title: t.label, symbol: t.symbol,
                               active: editor.sketch?.tool == t || editor.awaiting == .sketch(t)) {
@@ -115,10 +119,10 @@ struct CommandBar: View {
             if let url = editor.exportURL, editor.sketch == nil {
                 ShareLink(item: url) {
                     VStack(spacing: 3) {
-                        Image(systemName: "square.and.arrow.up").font(.title3).frame(height: 24)
-                        Text("STL").font(.caption2)
+                        Image(systemName: "square.and.arrow.up").font(.system(size: 16)).frame(height: 20)
+                        Text("STL").font(.system(size: 10))
                     }
-                    .frame(width: 60, height: 54)
+                    .frame(width: 48, height: 42)
                 }
                 .foregroundStyle(Color.primary)
             }

@@ -94,6 +94,8 @@ final class Editor: ObservableObject {
         if let s = session {
             switch s.draft.kind {
             case .fillet, .chamfer: return "\(s.draft.kind.label)するエッジをグラフィックス領域でタップしてください"
+            case .shell:
+                return "厚みを入れ、開口にする面をタップします(選ばなければ中が閉じた空洞)"
             case .revolve, .revolveCut:
                 return s.draft.revolveAxis == nil
                     ? "回転軸にするスケッチの線をタップしてください"
@@ -357,10 +359,72 @@ final class Editor: ObservableObject {
         }
     }
 
+    /// シェルのボタン
+    func shellButton() {
+        guard sketch == nil, session == nil else { return }
+        guard !store.mesh.positions.isEmpty else {
+            flash("先に押し出しか回転で形をつくってください")
+            return
+        }
+        var f = Feature(name: store.nextName(.shell), kind: .shell)
+        f.filletRadius = 2
+        selection = nil
+        tab = .features
+        session = FeatureSession(draft: f, isNew: true, replacing: nil)
+    }
+
+    /// タップした平らな面が、どの押し出しのどちらの端の面か(シェルの開口に使う)
+    func capRef(for hit: SceneHit) -> EdgeRef? {
+        guard hit.triangle < store.mesh.faceNormals.count else { return nil }
+        let n = store.mesh.faceNormals[hit.triangle]
+        var fs = store.featuresForBuild()
+        if let s = session, let i = store.index(of: s.draft.id) {
+            let before = Set(store.features.prefix(i).map(\.id))
+            fs = fs.filter { before.contains($0.id) }
+        }
+        for f in SolidBuilder.effective(fs).reversed() where f.kind == .extrude {
+            let plane = f.sketch.plane
+            guard abs(n.dot(plane.normal)) > 0.999 else { continue }
+            let (h0, h1, atBottom) = SolidBuilder.extent(of: f)
+            let h = plane.distance(hit.point)
+            let p2 = plane.project(hit.point)
+            let inside = f.sketch.shapes.contains { $0.isProfile && Polygon2D.contains(ProfileGeometry.outline($0), p2) }
+            guard inside else { continue }
+            let tol = 1e-3
+            let isMid = f.endCondition == .midPlane
+            if abs(h - h1) < tol { return isMid || atBottom ? .end(f.id) : .start(f.id) }
+            if abs(h - h0) < tol { return isMid || !atBottom ? .end(f.id) : .start(f.id) }
+        }
+        return nil
+    }
+
+    /// シェルの開口面(表示用): その端の輪郭
+    func capOutlines(_ refs: [EdgeRef]) -> [EdgeCandidate] {
+        var out: [EdgeCandidate] = []
+        for r in refs {
+            guard let f = SolidBuilder.effective(store.featuresForBuild()).first(where: { $0.id == r.featureID }) else { continue }
+            let (h0, h1, atBottom) = SolidBuilder.extent(of: f)
+            let h: Double
+            switch r {
+            case .start: h = atBottom ? h0 : h1
+            default: h = atBottom ? h1 : h0
+            }
+            for shape in f.sketch.shapes where shape.isProfile {
+                let loop = Polygon2D.dedupe(ProfileGeometry.outline(shape)).map { f.sketch.plane.point($0, height: h) }
+                out.append(EdgeCandidate(ref: r, points: loop, closed: true, alwaysVisible: true))
+            }
+        }
+        return out
+    }
+
     func confirmFeature() {
         guard let s = session else { return }
         if s.draft.kind.isEdgeFeature && s.draft.filletEdges.isEmpty {
             flash("\(s.draft.kind.label)するエッジを選んでください")
+            return
+        }
+        if s.draft.kind == .shell && s.draft.filletRadius <= 0 {
+            flash("シェルの厚みを入れてください")
             return
         }
         if s.isNew {
@@ -398,6 +462,20 @@ final class Editor: ObservableObject {
     func tapped(face: SceneHit?, edge: EdgeRef?) {
         if sketch != nil { return }
         if let s = session {
+            if s.draft.kind == .shell {
+                // 開口にする面: タップした平らな面
+                guard let hit = face else { return }
+                guard let r = capRef(for: hit) else {
+                    flash("押し出しの上下の平らな面を選んでください")
+                    return
+                }
+                if let i = s.draft.filletEdges.firstIndex(of: r) {
+                    session?.draft.filletEdges.remove(at: i)
+                } else {
+                    session?.draft.filletEdges.append(r)
+                }
+                return
+            }
             if s.draft.kind.isRevolve {
                 // 回転軸: タップしたスケッチの線
                 if case .side(_, let shapeID, let k, _)? = edge {

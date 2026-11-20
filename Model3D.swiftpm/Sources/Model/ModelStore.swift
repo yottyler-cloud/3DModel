@@ -116,7 +116,7 @@ final class ModelStore: ObservableObject {
             guard let i = d.features.firstIndex(where: { $0.id == id }) else { return }
             d.features.remove(at: i)
             // このフィーチャーのエッジを使っていたフィレットから外す
-            for k in d.features.indices where d.features[k].kind.isEdgeFeature {
+            for k in d.features.indices where d.features[k].kind.isModifier {
                 d.features[k].filletEdges.removeAll { $0.featureID == id }
             }
             if let r = d.rollbackIndex, i < r { d.rollbackIndex = r - 1 }

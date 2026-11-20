@@ -24,7 +24,7 @@ struct Workspace: View {
             Divider()
             HStack(spacing: 0) {
                 LeftPanel()
-                    .frame(width: 310)
+                    .frame(width: 262)
                 Divider()
                 GraphicsArea()
             }
@@ -108,7 +108,9 @@ struct GraphicsArea: View {
                                     emphasized: editor.selection == .feature(f.id)))
         }
         if let s = editor.session {
-            if s.draft.kind.isEdgeFeature {
+            if s.draft.kind == .shell {
+                o.selectedEdges = editor.capOutlines(s.draft.filletEdges)
+            } else if s.draft.kind.isEdgeFeature {
                 o.selectedEdges = editor.edges(of: s.draft.filletEdges, excluding: s.draft.id)
             } else {
                 o.sketches.append(.init(plane: s.draft.sketch.plane, shapes: s.draft.sketch.shapes, emphasized: true))
@@ -125,7 +127,9 @@ struct GraphicsArea: View {
             o.faceTriangles = tris
         case .feature(let id)?:
             if let f = store.feature(id) {
-                if f.kind.isEdgeFeature {
+                if f.kind == .shell {
+                    o.selectedEdges = editor.capOutlines(f.filletEdges)
+                } else if f.kind.isEdgeFeature {
                     o.selectedEdges = editor.edges(of: f.filletEdges, excluding: f.id)
                 } else if f.kind != .sketch {
                     o.sketches.append(.init(plane: f.sketch.plane, shapes: f.sketch.shapes, emphasized: true))
@@ -211,7 +215,7 @@ struct HeadsUpBar: View {
             }
             .disabled(editor.sketch != nil)
         }
-        .font(.title3)
+        .font(.body)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.regularMaterial)
@@ -228,10 +232,10 @@ struct ConfirmationCorner: View {
             VStack(spacing: 10) {
                 Button { editor.exitSketch(accept: true) } label: {
                     Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.title2).foregroundStyle(.blue)
+                        .font(.title3).foregroundStyle(.blue)
                 }
                 Button { editor.exitSketch(accept: false) } label: {
-                    Image(systemName: "xmark").font(.title2).foregroundStyle(.red)
+                    Image(systemName: "xmark").font(.title3).foregroundStyle(.red)
                 }
             }
             .padding(10)
@@ -240,10 +244,10 @@ struct ConfirmationCorner: View {
         } else if editor.session != nil {
             VStack(spacing: 10) {
                 Button { editor.confirmFeature() } label: {
-                    Image(systemName: "checkmark").font(.title2.bold()).foregroundStyle(.green)
+                    Image(systemName: "checkmark").font(.title3.bold()).foregroundStyle(.green)
                 }
                 Button { editor.cancelFeature() } label: {
-                    Image(systemName: "xmark").font(.title2).foregroundStyle(.red)
+                    Image(systemName: "xmark").font(.title3).foregroundStyle(.red)
                 }
             }
             .padding(10)
@@ -251,7 +255,7 @@ struct ConfirmationCorner: View {
             .clipShape(RoundedRectangle(cornerRadius: 10))
         } else if editor.awaiting != nil {
             Button { editor.awaiting = nil } label: {
-                Image(systemName: "xmark").font(.title2).foregroundStyle(.red)
+                Image(systemName: "xmark").font(.title3).foregroundStyle(.red)
             }
             .padding(10)
             .background(.regularMaterial)

@@ -16,7 +16,19 @@ enum SolidBuilder {
         // ソリッドボディの一覧(「つなげない」押し出しは別のボディになる)
         var bodies: [Solid] = []
         var messages: [String] = []
+        // シェル用: ここまでに作ったフィーチャーと、スケッチ面側がほかの形に接していたか
+        var done: [(Feature, Bool)] = []
         for f in effective(features) {
+            if f.kind == .shell {
+                if bodies.isEmpty {
+                    messages.append("「\(f.name)」: シェルにする形がまだありません")
+                    continue
+                }
+                let inner = shellInner(done, thickness: max(f.filletRadius, 0.01), open: f.filletEdges, messages: &messages)
+                bodies = bodies.map { $0.subtract(inner) }.filter { !$0.isEmpty }
+                continue
+            }
+            done.append((f, startContact(f, bodies: bodies)))
             let shapes = f.sketch.shapes.filter { $0.isProfile }
             if shapes.isEmpty {
                 messages.append("「\(f.name)」: スケッチに閉じた図形がありません")
@@ -79,7 +91,12 @@ enum SolidBuilder {
     /// 押し出しのスケッチ面側(始まりの面)に、ほかの形が接しているか
     static func startTouchesBody(_ f: Feature, bodies: [Solid]) -> Bool {
         let hasStart = f.startFillet > 0 || (f.sideTreatments ?? []).contains { !$0.atEnd && $0.size > 0 }
-        guard hasStart, f.endCondition != .midPlane, !bodies.isEmpty else { return false }
+        return hasStart && startContact(f, bodies: bodies)
+    }
+
+    /// 押し出しのスケッチ面側が、ほかの形に接しているか
+    static func startContact(_ f: Feature, bodies: [Solid]) -> Bool {
+        guard f.kind == .extrude, f.endCondition != .midPlane, !bodies.isEmpty else { return false }
         let (h0, h1, atBottom) = extent(of: f)
         let plane = f.sketch.plane
         let eps = 1e-4
@@ -131,7 +148,7 @@ enum SolidBuilder {
                 }
             }
         }
-        return fs.filter { $0.kind.isSolidFeature }
+        return fs.filter { $0.kind.isSolidFeature || $0.kind == .shell }
     }
 
     /// 押し出し・カットの範囲(スケッチ面からの高さ)
@@ -237,7 +254,7 @@ enum SolidBuilder {
     /// 図形を h0〜h1 まで押し出した柱。両端のふちを、辺ごとに丸め・面取りできる。
     /// bottom・top は図形の辺の番号順(足りない分は何もしない。1つだけなら全部の辺に使う)
     static func prism(shape: SketchShape, plane: SketchPlane, h0: Double, h1: Double,
-                      bottom: [EndTreatment], top: [EndTreatment]) -> [CSGPolygon] {
+                      bottom: [EndTreatment], top: [EndTreatment], baseInset: Double = 0) -> [CSGPolygon] {
         let height = h1 - h0
         let n = ProfileGeometry.sideCount(shape)
         guard height > 1e-9, n > 0 else { return [] }
@@ -257,7 +274,7 @@ enum SolidBuilder {
         var tries = 0
         while tries < 40 {
             let inward = (0..<n).map { i in
-                max(bot[i].flare ? 0 : bot[i].size, tp[i].flare ? 0 : tp[i].size)
+                max(bot[i].flare ? 0 : bot[i].size, tp[i].flare ? 0 : tp[i].size) + max(baseInset, 0)
             }
             if inward.allSatisfy({ $0 < 1e-9 }) || ProfileGeometry.insetIsValid(shape, sideInsets: inward) { break }
             for i in 0..<n {
@@ -280,7 +297,7 @@ enum SolidBuilder {
             return t.flare ? -v : v
         }
         func insets(at h: Double) -> [Double] {
-            (0..<n).map { i in profile(bot[i], h - h0) + profile(tp[i], h1 - h) }
+            (0..<n).map { i in baseInset + profile(bot[i], h - h0) + profile(tp[i], h1 - h) }
         }
 
         // 段の高さ
@@ -343,6 +360,102 @@ enum SolidBuilder {
         return polys
     }
 
+    // MARK: シェル
+
+    /// シェルでくり抜く形: これまでのフィーチャーを厚みの分だけ内側に縮めて作り直したもの
+    /// (押し出し・回転は縮め、カットは広げる)。開口に選んだ面は外まで抜く
+    static func shellInner(_ prev: [(Feature, Bool)], thickness t: Double, open: [EdgeRef],
+                           messages: inout [String]) -> Solid {
+        var inner = Solid.empty
+        let far = t * 3 + 1
+        for (f, touch) in prev {
+            let shapes = f.sketch.shapes.filter { $0.isProfile }
+            guard !shapes.isEmpty else { continue }
+            let depth = nestingDepth(shapes)
+            let plane = f.sketch.plane
+            let (h0, h1, atBottom) = extent(of: f)
+            let isMid = f.endCondition == .midPlane
+            let bottomIsStart = !isMid && atBottom
+            let topIsStart = !isMid && !atBottom
+            switch f.kind {
+            case .extrude:
+                let startOpen = open.contains(.start(f.id)), endOpen = open.contains(.end(f.id))
+                // 端をどれだけ外へ延ばすか(負なら縮める)
+                func grow(_ isStart: Bool) -> Double {
+                    if isStart ? startOpen : endOpen { return far }
+                    if isStart && touch { return t }   // ほかの形に接する側: 中の空洞をつなげる
+                    return -t
+                }
+                let hb = h0 - grow(bottomIsStart), ht = h1 + grow(topIsStart)
+                guard ht - hb > 1e-6 else { continue }
+                for (i, shape) in shapes.enumerated() where depth[i] % 2 == 0 {
+                    guard ProfileGeometry.insetIsValid(shape, inset: t) else {
+                        messages.append("「\(f.name)」: シェルの厚みが形に対して大きすぎます")
+                        continue
+                    }
+                    // 外側のフィレット・面取りは、厚みの分だけ小さくして内側にもつける
+                    func shrunk(_ isStart: Bool, open: Bool) -> [EndTreatment] {
+                        if open { return [] }
+                        let size = isStart ? f.startFillet : f.endFillet
+                        let chamfer = isStart ? (f.startIsChamfer ?? false) : (f.endIsChamfer ?? false)
+                        var list = Array(repeating: EndTreatment(size: max(size - t, 0), chamfer: chamfer, flare: false),
+                                         count: ProfileGeometry.sideCount(shape))
+                        for st in f.sideTreatments ?? [] where st.shapeID == shape.id && st.atEnd == !isStart && st.side < list.count {
+                            list[st.side] = EndTreatment(size: max(st.size - t, 0), chamfer: st.chamfer, flare: false)
+                        }
+                        return list
+                    }
+                    let bOpen = bottomIsStart ? startOpen || touch : (isMid ? endOpen : endOpen)
+                    let tOpen = topIsStart ? startOpen || touch : endOpen
+                    var piece = Solid(polygons: prism(shape: shape, plane: plane, h0: hb, h1: ht,
+                                                      bottom: shrunk(bottomIsStart, open: bOpen),
+                                                      top: shrunk(topIsStart, open: tOpen), baseInset: t))
+                    // 形の中の穴: 穴のまわりにも厚みを残す
+                    for (j, hole) in shapes.enumerated() where depth[j] % 2 == 1 {
+                        piece = piece.subtract(Solid(polygons: prism(shape: hole, plane: plane, h0: hb - 1, h1: ht + 1,
+                                                                     bottom: [], top: [], baseInset: -t)))
+                    }
+                    inner = inner.union(piece)
+                }
+            case .cut:
+                // カットは広げる: 入口は外まで、底は厚みの分だけ深く
+                let entryBottom = bottomIsStart, entryTop = topIsStart
+                let through = f.endCondition == .throughAll
+                let hb = h0 - (entryBottom || through ? far : t)
+                let ht = h1 + (entryTop || through ? far : t)
+                for (i, shape) in shapes.enumerated() where depth[i] % 2 == 0 {
+                    inner = inner.subtract(Solid(polygons: prism(shape: shape, plane: plane, h0: hb, h1: ht,
+                                                                 bottom: [], top: [], baseInset: -t)))
+                }
+            case .revolve, .revolveCut:
+                guard let axis = f.revolveAxis else { continue }
+                let sign = f.kind == .revolve ? 1.0 : -1.0
+                var piece = Solid.empty
+                for (i, shape) in shapes.enumerated() where depth[i] % 2 == 0 {
+                    // 回転軸の上にある辺はずらさない(中の空洞が軸まで届くように)
+                    let insets = (0..<ProfileGeometry.sideCount(shape)).map { k -> Double in
+                        if let seg = shape.segment(k), onAxis(seg, axis) { return 0 }
+                        return sign * t
+                    }
+                    if let polys = revolve(shape: shape, feature: f, axis: axis, sideInsets: insets) {
+                        piece = piece.union(Solid(polygons: polys))
+                    }
+                }
+                inner = f.kind == .revolve ? inner.union(piece) : inner.subtract(piece)
+            default:
+                break
+            }
+        }
+        return inner
+    }
+
+    /// 線分が回転軸の上にあるか
+    private static func onAxis(_ seg: (Vec2, Vec2), _ axis: (Vec2, Vec2)) -> Bool {
+        let d = (axis.1 - axis.0).normalized
+        func dist(_ p: Vec2) -> Double { abs((p - axis.0).cross(d)) }
+        return dist(seg.0) < 1e-6 && dist(seg.1) < 1e-6
+    }
+
     static let revolveSegments = 48
 
     /// 中心線を軸にスケッチを回した形(輪郭が軸をまたぐと nil)
@@ -362,12 +475,14 @@ enum SolidBuilder {
     }
 
     /// 1つの輪郭を回す
-    static func revolve(shape: SketchShape, feature f: Feature, axis: (Vec2, Vec2)) -> [CSGPolygon]? {
+    static func revolve(shape: SketchShape, feature f: Feature, axis: (Vec2, Vec2),
+                        sideInsets: [Double]? = nil) -> [CSGPolygon]? {
         let plane = f.sketch.plane
         let a = axis.0
         let d = (axis.1 - a).normalized
         var perp = Vec2(-d.y, d.x)
-        let pts = Polygon2D.dedupe(ProfileGeometry.outline(shape))
+        let pts = Polygon2D.dedupe(sideInsets.map { ProfileGeometry.outline(shape, sideInsets: $0) }
+            ?? ProfileGeometry.outline(shape))
         guard pts.count >= 3 else { return [] }
         // 軸からの距離(片側にあること)
         var radial = pts.map { ($0 - a).dot(perp) }

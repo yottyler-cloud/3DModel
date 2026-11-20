@@ -208,9 +208,9 @@ struct KeypadView: View {
             keypad.press(k)
         } label: {
             Text(k)
-                .font(.system(size: k == "完了" ? 17 : 21, weight: .medium, design: .monospaced))
+                .font(.system(size: k == "完了" ? 15 : 18, weight: .medium, design: .monospaced))
                 .frame(maxWidth: .infinity)
-                .frame(height: 40)
+                .frame(height: 33)
                 .foregroundStyle(strong ? Color.white : Color.primary)
                 .background(strong ? Color.accentColor : Color(uiColor: .systemBackground),
                             in: RoundedRectangle(cornerRadius: 7))

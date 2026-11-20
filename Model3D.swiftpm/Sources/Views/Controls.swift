@@ -10,7 +10,7 @@ struct NumberField: View {
         HStack {
             Text(label)
             Spacer()
-            KeypadButton(key: label, title: label, value: $value, width: 96)
+            KeypadButton(key: label, title: label, value: $value, width: 78)
             Text(unit).foregroundStyle(.secondary).font(.footnote)
         }
     }
@@ -66,19 +66,19 @@ struct PMHeader: View {
     var onCancel: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: symbol).foregroundStyle(Color.accentColor)
-            Text(title).font(.headline).lineLimit(1)
+            Text(title).font(.subheadline.bold()).lineLimit(1)
             Spacer()
             Button(action: onOK) {
-                Image(systemName: "checkmark.circle.fill").font(.title).foregroundStyle(.green)
+                Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(.green)
             }
             Button(action: onCancel) {
-                Image(systemName: "xmark.circle.fill").font(.title).foregroundStyle(.red)
+                Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.red)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
         .background(Color(uiColor: .secondarySystemBackground))
     }
 }
@@ -168,13 +168,14 @@ struct CommandButton: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: symbol).font(.title3).frame(height: 24)
-                Text(title).font(.caption2).lineLimit(2).multilineTextAlignment(.center)
+            VStack(spacing: 2) {
+                Image(systemName: symbol).font(.system(size: 16)).frame(height: 20)
+                Text(title).font(.system(size: 10)).lineLimit(2).multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.8)
             }
-            .frame(width: 74, height: 54)
+            .frame(width: 56, height: 42)
             .background(active ? Color.accentColor.opacity(0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.primary)

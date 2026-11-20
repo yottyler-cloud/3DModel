@@ -17,7 +17,9 @@ struct LeftPanel: View {
             if editor.sketch != nil {
                 SketchPropertyManager()
             } else if let s = editor.session {
-                if s.draft.kind.isEdgeFeature {
+                if s.draft.kind == .shell {
+                    ShellPropertyManager()
+                } else if s.draft.kind.isEdgeFeature {
                     FilletPropertyManager()
                 } else if s.draft.kind.isRevolve {
                     RevolvePropertyManager()
@@ -29,6 +31,9 @@ struct LeftPanel: View {
             }
         }
         .background(Color(uiColor: .systemGroupedBackground))
+        // iPad mini でも見やすいよう、小さめの文字と行
+        .font(.subheadline)
+        .environment(\.defaultMinListRowHeight, 30)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if keypad.isOpen { KeypadView(keypad: keypad) }
         }
@@ -405,5 +410,54 @@ struct RevolvePropertyManager: View {
                 }
             }
         }
+    }
+}
+
+/// シェル
+struct ShellPropertyManager: View {
+    @EnvironmentObject var editor: Editor
+
+    var body: some View {
+        let draft = editor.session?.draft
+        VStack(spacing: 0) {
+            PMHeader(title: draft?.name ?? "", symbol: FeatureKind.shell.symbol,
+                     onOK: { editor.confirmFeature() }, onCancel: { editor.cancelFeature() })
+            Form {
+                Section("パラメータ") {
+                    NumberField(label: "厚み", value: editor.draft(\.filletRadius, 2))
+                }
+                Section {
+                    if draft?.filletEdges.isEmpty ?? true {
+                        Text("選んでいません(中が閉じた空洞になります)").foregroundStyle(.secondary)
+                    }
+                    ForEach(draft?.filletEdges ?? [], id: \.self) { e in
+                        HStack {
+                            Image(systemName: "square.dashed").foregroundStyle(.orange)
+                            Text(capName(e)).font(.callout)
+                            Spacer()
+                            Button {
+                                editor.session?.draft.filletEdges.removeAll { $0 == e }
+                            } label: {
+                                Image(systemName: "xmark.circle").foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                } header: {
+                    Text("取り除く面(開口)")
+                } footer: {
+                    Text("グラフィックス領域で押し出しの上下の平らな面をタップすると、その面が開口になります。もう一度タップで外します。")
+                }
+                Section("名前") {
+                    TextField("名前", text: editor.draft(\.name, ""))
+                }
+            }
+        }
+    }
+
+    private func capName(_ e: EdgeRef) -> String {
+        let name = editor.store.feature(e.featureID)?.name ?? "(削除済み)"
+        if case .start = e { return "\(name): スケッチ面側の面" }
+        return "\(name): 先端側の面"
     }
 }
