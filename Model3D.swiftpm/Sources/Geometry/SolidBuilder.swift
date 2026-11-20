@@ -254,7 +254,8 @@ enum SolidBuilder {
     /// 図形を h0〜h1 まで押し出した柱。両端のふちを、辺ごとに丸め・面取りできる。
     /// bottom・top は図形の辺の番号順(足りない分は何もしない。1つだけなら全部の辺に使う)
     static func prism(shape: SketchShape, plane: SketchPlane, h0: Double, h1: Double,
-                      bottom: [EndTreatment], top: [EndTreatment], baseInset: Double = 0) -> [CSGPolygon] {
+                      bottom: [EndTreatment], top: [EndTreatment], baseInset: Double = 0,
+                      sideBase: [Double]? = nil) -> [CSGPolygon] {
         let height = h1 - h0
         let n = ProfileGeometry.sideCount(shape)
         guard height > 1e-9, n > 0 else { return [] }
@@ -263,6 +264,11 @@ enum SolidBuilder {
             return (0..<n).map { $0 < t.count ? t[$0] : .none }
         }
         var bot = expand(bottom), tp = expand(top)
+        // 辺ごとの基本のずらし量(シェルの開口にした側面は外へ大きく出す)
+        func base(_ i: Int) -> Double {
+            if let sb = sideBase, i < sb.count { return sb[i] }
+            return baseInset
+        }
 
         // 上下の丸めが重ならないように
         let bm = bot.map(\.size).max() ?? 0, tm = tp.map(\.size).max() ?? 0
@@ -274,7 +280,7 @@ enum SolidBuilder {
         var tries = 0
         while tries < 40 {
             let inward = (0..<n).map { i in
-                max(bot[i].flare ? 0 : bot[i].size, tp[i].flare ? 0 : tp[i].size) + max(baseInset, 0)
+                max(bot[i].flare ? 0 : bot[i].size, tp[i].flare ? 0 : tp[i].size) + max(base(i), 0)
             }
             if inward.allSatisfy({ $0 < 1e-9 }) || ProfileGeometry.insetIsValid(shape, sideInsets: inward) { break }
             for i in 0..<n {
@@ -297,7 +303,7 @@ enum SolidBuilder {
             return t.flare ? -v : v
         }
         func insets(at h: Double) -> [Double] {
-            (0..<n).map { i in baseInset + profile(bot[i], h - h0) + profile(tp[i], h1 - h) }
+            (0..<n).map { i in base(i) + profile(bot[i], h - h0) + profile(tp[i], h1 - h) }
         }
 
         // 段の高さ
@@ -389,7 +395,14 @@ enum SolidBuilder {
                 let hb = h0 - grow(bottomIsStart), ht = h1 + grow(topIsStart)
                 guard ht - hb > 1e-6 else { continue }
                 for (i, shape) in shapes.enumerated() where depth[i] % 2 == 0 {
-                    guard ProfileGeometry.insetIsValid(shape, inset: t) else {
+                    // 開口にした側面は、その辺を外へ大きく出して壁を抜く
+                    let sideBase = (0..<ProfileGeometry.sideCount(shape)).map { k -> Double in
+                        open.contains { r in
+                            if case .side(let fid, let sid, let kk, _) = r { return fid == f.id && sid == shape.id && kk == k }
+                            return false
+                        } ? -far : t
+                    }
+                    guard ProfileGeometry.insetIsValid(shape, sideInsets: sideBase.map { max($0, 0) }) else {
                         messages.append("「\(f.name)」: シェルの厚みが形に対して大きすぎます")
                         continue
                     }
@@ -409,7 +422,8 @@ enum SolidBuilder {
                     let tOpen = topIsStart ? startOpen || touch : endOpen
                     var piece = Solid(polygons: prism(shape: shape, plane: plane, h0: hb, h1: ht,
                                                       bottom: shrunk(bottomIsStart, open: bOpen),
-                                                      top: shrunk(topIsStart, open: tOpen), baseInset: t))
+                                                      top: shrunk(topIsStart, open: tOpen), baseInset: t,
+                                                      sideBase: sideBase))
                     // 形の中の穴: 穴のまわりにも厚みを残す
                     for (j, hole) in shapes.enumerated() where depth[j] % 2 == 1 {
                         piece = piece.subtract(Solid(polygons: prism(shape: hole, plane: plane, h0: hb - 1, h1: ht + 1,

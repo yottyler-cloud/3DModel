@@ -50,6 +50,8 @@ struct GraphicsArea: View {
     @EnvironmentObject var editor: Editor
     @EnvironmentObject var store: ModelStore
 
+    @StateObject private var triad = ViewTriad()
+
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -61,7 +63,8 @@ struct GraphicsArea: View {
                     viewCommand: editor.viewCommand,
                     sketchCamera: sketchCamera,
                     edgeCandidates: editor.edgeCandidates(),
-                    onTap: { face, edge in editor.tapped(face: face, edge: edge) })
+                    onTap: { face, edge in editor.tapped(face: face, edge: edge) },
+                    triad: triad)
 
                 if editor.sketch != nil {
                     SketchOverlay()
@@ -74,6 +77,10 @@ struct GraphicsArea: View {
                         Spacer()
                     }
                     Spacer()
+                    HStack {
+                        TriadView(triad: triad)
+                        Spacer()
+                    }
                     StatusBar()
                 }
                 .padding(10)

@@ -384,16 +384,33 @@ final class Editor: ObservableObject {
         }
         for f in SolidBuilder.effective(fs).reversed() where f.kind == .extrude {
             let plane = f.sketch.plane
-            guard abs(n.dot(plane.normal)) > 0.999 else { continue }
             let (h0, h1, atBottom) = SolidBuilder.extent(of: f)
             let h = plane.distance(hit.point)
             let p2 = plane.project(hit.point)
-            let inside = f.sketch.shapes.contains { $0.isProfile && Polygon2D.contains(ProfileGeometry.outline($0), p2) }
-            guard inside else { continue }
             let tol = 1e-3
-            let isMid = f.endCondition == .midPlane
-            if abs(h - h1) < tol { return isMid || atBottom ? .end(f.id) : .start(f.id) }
-            if abs(h - h0) < tol { return isMid || !atBottom ? .end(f.id) : .start(f.id) }
+            if abs(n.dot(plane.normal)) > 0.999 {
+                // 上下の面
+                let inside = f.sketch.shapes.contains { $0.isProfile && Polygon2D.contains(ProfileGeometry.outline($0), p2) }
+                guard inside else { continue }
+                let isMid = f.endCondition == .midPlane
+                if abs(h - h1) < tol { return isMid || atBottom ? .end(f.id) : .start(f.id) }
+                if abs(h - h0) < tol { return isMid || !atBottom ? .end(f.id) : .start(f.id) }
+                continue
+            }
+            // 側面: 図形の辺から立ち上がる面
+            guard h > h0 - tol, h < h1 + tol else { continue }
+            for shape in f.sketch.shapes where shape.isProfile && shape.kind != .circle {
+                let c = shape.corners
+                let ccw = Polygon2D.signedArea(c) > 0
+                for k in c.indices {
+                    let a = c[k], b = c[(k + 1) % c.count]
+                    let e = (b - a).normalized
+                    let out2 = ccw ? Vec2(e.y, -e.x) : Vec2(-e.y, e.x)
+                    let out3 = plane.u * out2.x + plane.v * out2.y
+                    guard n.dot(out3) > 0.999, Polygon2D.distanceToSegment(p2, a, b) < 1e-3 else { continue }
+                    return .side(f.id, shape.id, k, false)
+                }
+            }
         }
         return nil
     }
@@ -404,6 +421,15 @@ final class Editor: ObservableObject {
         for r in refs {
             guard let f = SolidBuilder.effective(store.featuresForBuild()).first(where: { $0.id == r.featureID }) else { continue }
             let (h0, h1, atBottom) = SolidBuilder.extent(of: f)
+            if case .side(_, let sid, let k, _) = r {
+                // 開口にした側面: その面の四角
+                guard let shape = f.sketch.shapes.first(where: { $0.id == sid }), let seg = shape.segment(k) else { continue }
+                let pl = f.sketch.plane
+                out.append(EdgeCandidate(ref: r, points: [pl.point(seg.0, height: h0), pl.point(seg.1, height: h0),
+                                                          pl.point(seg.1, height: h1), pl.point(seg.0, height: h1)],
+                                         closed: true, alwaysVisible: true))
+                continue
+            }
             let h: Double
             switch r {
             case .start: h = atBottom ? h0 : h1
@@ -466,7 +492,7 @@ final class Editor: ObservableObject {
                 // 開口にする面: タップした平らな面
                 guard let hit = face else { return }
                 guard let r = capRef(for: hit) else {
-                    flash("押し出しの上下の平らな面を選んでください")
+                    flash("押し出しでできた平らな面(上下・側面)を選んでください")
                     return
                 }
                 if let i = s.draft.filletEdges.firstIndex(of: r) {

@@ -446,7 +446,7 @@ struct ShellPropertyManager: View {
                 } header: {
                     Text("取り除く面(開口)")
                 } footer: {
-                    Text("グラフィックス領域で押し出しの上下の平らな面をタップすると、その面が開口になります。もう一度タップで外します。")
+                    Text("グラフィックス領域で平らな面(押し出しの上下の面・側面)をタップすると、その面が開口になります。もう一度タップで外します。")
                 }
                 Section("名前") {
                     TextField("名前", text: editor.draft(\.name, ""))
@@ -458,6 +458,7 @@ struct ShellPropertyManager: View {
     private func capName(_ e: EdgeRef) -> String {
         let name = editor.store.feature(e.featureID)?.name ?? "(削除済み)"
         if case .start = e { return "\(name): スケッチ面側の面" }
+        if case .side(_, _, let k, _) = e { return "\(name): 側面\(k + 1)" }
         return "\(name): 先端側の面"
     }
 }

@@ -2,6 +2,42 @@ import SwiftUI
 import SceneKit
 import UIKit
 
+/// 画面の向き(カメラの右・上の向き)。XYZ軸の表示に使う
+final class ViewTriad: ObservableObject {
+    @Published var right = Vec3(1, 0, 0)
+    @Published var up = Vec3(0, 1, 0)
+}
+
+/// グラフィックス領域の隅に出すXYZ軸
+struct TriadView: View {
+    @ObservedObject var triad: ViewTriad
+
+    var body: some View {
+        Canvas { ctx, size in
+            let c = CGPoint(x: size.width / 2, y: size.height / 2)
+            let len = min(size.width, size.height) * 0.36
+            let axes: [(String, Vec3, Color)] = [("X", Vec3(1, 0, 0), .red), ("Y", Vec3(0, 1, 0), .green),
+                                                  ("Z", Vec3(0, 0, 1), .blue)]
+            let fwd = triad.right.cross(triad.up)
+            // 奥の軸から描く
+            for (name, a, color) in axes.sorted(by: { $0.1.dot(fwd) < $1.1.dot(fwd) }) {
+                let x = CGFloat(a.dot(triad.right)), y = CGFloat(a.dot(triad.up))
+                let tip = CGPoint(x: c.x + x * len, y: c.y - y * len)
+                var p = Path()
+                p.move(to: c)
+                p.addLine(to: tip)
+                ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                let label = CGPoint(x: c.x + x * (len + 10), y: c.y - y * (len + 10))
+                ctx.draw(Text(name).font(.system(size: 12, weight: .bold)).foregroundColor(color), at: label)
+            }
+            ctx.fill(Path(ellipseIn: CGRect(x: c.x - 2.5, y: c.y - 2.5, width: 5, height: 5)), with: .color(.gray))
+        }
+        .frame(width: 76, height: 76)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .allowsHitTesting(false)
+    }
+}
+
 /// グラフィックス領域に重ねて描くもの
 struct SceneOverlays: Equatable {
     struct SketchLines: Equatable {
@@ -32,6 +68,7 @@ struct ModelSceneView: UIViewRepresentable {
     var sketchCamera: SketchCamera?
     var edgeCandidates: [EdgeCandidate]
     var onTap: (SceneHit?, EdgeRef?) -> Void
+    var triad: ViewTriad?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -49,6 +86,7 @@ struct ModelSceneView: UIViewRepresentable {
         let tap = UITapGestureRecognizer(target: c, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tap)
         c.view = view
+        view.delegate = c
         c.fit(.iso)
         return view
     }
@@ -56,6 +94,7 @@ struct ModelSceneView: UIViewRepresentable {
     func updateUIView(_ view: SCNView, context: Context) {
         let c = context.coordinator
         c.onTap = onTap
+        c.triad = triad
         c.candidates = edgeCandidates
         c.meshForPick = mesh
         if c.meshVersion != meshVersion {
@@ -80,7 +119,25 @@ struct ModelSceneView: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, SCNSceneRendererDelegate {
+        weak var triad: ViewTriad?
+        private var lastRight = Vec3.zero, lastUp = Vec3.zero
+
+        /// 描画のたびに、カメラの向きが変わっていれば軸の表示を更新する
+        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+            guard let pov = renderer.pointOfView else { return }
+            let r = pov.worldRight, u = pov.worldUp
+            let right = Vec3(Double(r.x), Double(r.y), Double(r.z))
+            let up = Vec3(Double(u.x), Double(u.y), Double(u.z))
+            if (right - lastRight).length < 1e-3 && (up - lastUp).length < 1e-3 { return }
+            lastRight = right
+            lastUp = up
+            DispatchQueue.main.async { [weak self] in
+                self?.triad?.right = right
+                self?.triad?.up = up
+            }
+        }
+
         let scene = SCNScene()
         let modelNode = SCNNode()
         let edgesNode = SCNNode()
