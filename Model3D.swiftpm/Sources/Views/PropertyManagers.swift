@@ -261,7 +261,7 @@ struct RevolvePropertyManager: View {
     var body: some View {
         let draft = editor.session?.draft
         let kind = draft?.kind ?? .revolve
-        let hasAxis = draft?.sketch.shapes.contains { $0.kind == .centerline && $0.isValid } ?? false
+        let hasAxis = draft?.revolveAxis != nil
         VStack(spacing: 0) {
             PMHeader(title: draft?.name ?? "", symbol: kind.symbol,
                      onOK: { editor.confirmFeature() }, onCancel: { editor.cancelFeature() })
@@ -270,22 +270,15 @@ struct RevolvePropertyManager: View {
                     TextField("名前", text: editor.draft(\.name, ""))
                 }
                 Section {
-                    if hasAxis {
-                        Label("スケッチの中心線", systemImage: "checkmark.circle").foregroundStyle(.green)
+                    if hasAxis, let d = draft {
+                        Label(editor.describeAxis(d), systemImage: "checkmark.circle").foregroundStyle(.green)
                     } else {
-                        Label("中心線がありません", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                        Button("スケッチを編集して中心線を描く") {
-                            if let id = editor.session?.replacing {
-                                editor.cancelFeature()
-                                editor.editSketch(id)
-                                editor.sketch?.tool = .centerline
-                            }
-                        }
+                        Label("未選択", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                     }
                 } header: {
                     Text("回転軸")
                 } footer: {
-                    Text("輪郭は中心線の片側に描きます。中心線に接していてもかまいません。")
+                    Text("グラフィックス領域で、スケッチの線(三角形や長方形の辺、中心線)をタップすると回転軸になります。選んだ軸はオレンジで表示されます。輪郭は軸の片側にあるようにします(軸に接していてもかまいません)。")
                 }
                 Section("方向 1") {
                     Picker("回転のしかた", selection: Binding(

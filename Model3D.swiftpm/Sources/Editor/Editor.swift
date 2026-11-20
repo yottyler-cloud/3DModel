@@ -51,6 +51,8 @@ struct EdgeCandidate: Equatable {
     var ref: EdgeRef
     var points: [Vec3]
     var closed: Bool
+    /// 面に隠れていても選べる(スケッチの線)
+    var alwaysVisible = false
 
     /// 角から伸びる縦のエッジか
     var isCornerEdge: Bool {
@@ -92,6 +94,10 @@ final class Editor: ObservableObject {
         if let s = session {
             switch s.draft.kind {
             case .fillet, .chamfer: return "\(s.draft.kind.label)するエッジをグラフィックス領域でタップしてください"
+            case .revolve, .revolveCut:
+                return s.draft.revolveAxis == nil
+                    ? "回転軸にするスケッチの線をタップしてください"
+                    : "軸: \(describeAxis(s.draft))。ほかの線をタップすると軸を変えられます"
             default: return "条件を入れて ✓ で確定します"
             }
         }
@@ -125,7 +131,7 @@ final class Editor: ObservableObject {
         awaiting = nil
         switch pending {
         case .sketch(let tool): startSketch(on: plane, tool: tool, continueWith: nil)
-        case .feature(let k): startSketch(on: plane, tool: k.isRevolve ? .centerline : .cornerRect, continueWith: k)
+        case .feature(let k): startSketch(on: plane, tool: k.isRevolve ? .line : .cornerRect, continueWith: k)
         }
     }
 
@@ -287,7 +293,7 @@ final class Editor: ObservableObject {
             && !store.isRolledBack($0.id) }) {
             beginFeature(kind: kind, sketchFeature: f)
         } else if let p = selection?.sketchPlane {
-            startSketch(on: p, tool: kind.isRevolve ? .centerline : .cornerRect, continueWith: kind)
+            startSketch(on: p, tool: kind.isRevolve ? .line : .cornerRect, continueWith: kind)
         } else {
             awaiting = .feature(kind)
         }
@@ -301,8 +307,10 @@ final class Editor: ObservableObject {
         if kind.isRevolve {
             // 回転: 360°が初期値(distance を角度として使う)
             f.distance = 360
-            if !sk.sketch.shapes.contains(where: { $0.kind == .centerline && $0.isValid }) {
-                flash("回転の軸にする中心線をスケッチに描いてください")
+            // 中心線があれば、それを軸にしておく(なければ、あとでスケッチの線をタップして選ぶ)
+            if let c = sk.sketch.shapes.first(where: { $0.kind == .centerline && $0.isValid }) {
+                f.axisShapeID = c.id
+                f.axisSide = 0
             }
         } else if let r = store.mesh.range(along: sk.sketch.plane) {
             // 形がある側を見て、向きを決める(押し出しは形の外へ、カットは形の中へ)
@@ -390,6 +398,14 @@ final class Editor: ObservableObject {
     func tapped(face: SceneHit?, edge: EdgeRef?) {
         if sketch != nil { return }
         if let s = session {
+            if s.draft.kind.isRevolve {
+                // 回転軸: タップしたスケッチの線
+                if case .side(_, let shapeID, let k, _)? = edge {
+                    session?.draft.axisShapeID = shapeID
+                    session?.draft.axisSide = k
+                }
+                return
+            }
             if s.draft.kind.isEdgeFeature {
                 guard let e = edge else { return }
                 if let i = s.draft.filletEdges.firstIndex(of: e) {
@@ -418,7 +434,9 @@ final class Editor: ObservableObject {
 
     /// フィレットで選べるエッジ(対象は押し出し・カット)
     func edgeCandidates() -> [EdgeCandidate] {
-        guard let s = session, s.draft.kind.isEdgeFeature else { return [] }
+        guard let s = session else { return [] }
+        if s.draft.kind.isRevolve { return axisCandidates(s.draft) }
+        guard s.draft.kind.isEdgeFeature else { return [] }
         var fs = store.featuresForBuild().filter { $0.id != s.draft.id }
         if let i = store.index(of: s.draft.id) {
             // 既存フィレットの編集: それより前のフィーチャーだけ
@@ -426,6 +444,41 @@ final class Editor: ObservableObject {
             fs = fs.filter { before.contains($0.id) }
         }
         return Editor.candidates(for: SolidBuilder.effective(fs), mesh: store.mesh)
+    }
+
+    /// 回転軸に選べるスケッチの直線(長方形・多角形の辺と中心線)
+    func axisCandidates(_ f: Feature) -> [EdgeCandidate] {
+        let plane = f.sketch.plane
+        var out: [EdgeCandidate] = []
+        for shape in f.sketch.shapes where shape.isValid {
+            for k in 0..<shape.segmentCount {
+                guard let seg = shape.segment(k) else { continue }
+                out.append(EdgeCandidate(ref: .side(f.id, shape.id, k, false),
+                                         points: [plane.point(seg.0), plane.point(seg.1)],
+                                         closed: false, alwaysVisible: true))
+            }
+        }
+        return out
+    }
+
+    /// 選んでいる回転軸(表示用)
+    func axisEdge(_ f: Feature) -> EdgeCandidate? {
+        guard let axis = f.revolveAxis else { return nil }
+        let (a, b) = axis
+        // 軸の線を少し延ばして見やすくする
+        let d = (b - a).normalized * max(a.distance(to: b) * 0.15, 3)
+        return EdgeCandidate(ref: .side(f.id, f.axisShapeID ?? f.id, f.axisSide ?? 0, false),
+                             points: [f.sketch.plane.point(a - d), f.sketch.plane.point(b + d)],
+                             closed: false, alwaysVisible: true)
+    }
+
+    /// 回転軸の説明
+    func describeAxis(_ f: Feature) -> String {
+        guard f.revolveAxis != nil else { return "未選択" }
+        if let id = f.axisShapeID, let shape = f.sketch.shapes.first(where: { $0.id == id }) {
+            return shape.kind == .centerline ? "中心線" : "\(shape.kind.label)の辺\((f.axisSide ?? 0) + 1)"
+        }
+        return "中心線"
     }
 
     /// あるフィレットで選んだエッジの形(表示用)

@@ -103,6 +103,22 @@ struct Feature: Codable, Identifiable, Hashable {
 
     var suppressed = false
 
+    /// 回転軸にするスケッチの線(図形と、その辺の番号。中心線は辺0)
+    var axisShapeID: UUID?
+    var axisSide: Int?
+
+    /// 回転軸の線分(スケッチ座標)。選んでいなければ最初の中心線
+    var revolveAxis: (Vec2, Vec2)? {
+        if let id = axisShapeID, let shape = sketch.shapes.first(where: { $0.id == id }),
+           let seg = shape.segment(axisSide ?? 0) {
+            return seg
+        }
+        if let c = sketch.shapes.first(where: { $0.kind == .centerline && $0.isValid }) {
+            return (c.points[0], c.points[1])
+        }
+        return nil
+    }
+
     /// 元の形とつなげるか(nil は古い保存データ: つなげる)。false なら別のボディになる
     var merge: Bool?
     var mergeResult: Bool {

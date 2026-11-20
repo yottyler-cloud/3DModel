@@ -106,6 +106,29 @@ struct SketchShape: Codable, Identifiable, Hashable {
         SketchShape(kind: .centerline, points: [a, b])
     }
 
+    /// 直線の辺(長方形・多角形の辺 k、中心線は k = 0)。円は nil
+    func segment(_ k: Int) -> (Vec2, Vec2)? {
+        switch kind {
+        case .centerline:
+            return isValid ? (points[0], points[1]) : nil
+        case .rectangle, .polygon:
+            let c = corners
+            guard k >= 0, k < c.count else { return nil }
+            return (c[k], c[(k + 1) % c.count])
+        case .circle:
+            return nil
+        }
+    }
+
+    /// 直線の辺の数
+    var segmentCount: Int {
+        switch kind {
+        case .centerline: return 1
+        case .rectangle, .polygon: return corners.count
+        case .circle: return 0
+        }
+    }
+
     /// 押し出し・回転に使う閉じた輪郭か(中心線は輪郭ではない)
     var isProfile: Bool { kind != .centerline && isValid }
 

@@ -60,7 +60,7 @@ struct GraphicsArea: View {
                     overlays: overlays,
                     viewCommand: editor.viewCommand,
                     sketchCamera: sketchCamera,
-                    edgeCandidates: editor.session?.draft.kind.isEdgeFeature == true ? editor.edgeCandidates() : [],
+                    edgeCandidates: editor.edgeCandidates(),
                     onTap: { face, edge in editor.tapped(face: face, edge: edge) })
 
                 if editor.sketch != nil {
@@ -112,6 +112,9 @@ struct GraphicsArea: View {
                 o.selectedEdges = editor.edges(of: s.draft.filletEdges, excluding: s.draft.id)
             } else {
                 o.sketches.append(.init(plane: s.draft.sketch.plane, shapes: s.draft.sketch.shapes, emphasized: true))
+                if s.draft.kind.isRevolve, let axis = editor.axisEdge(s.draft) {
+                    o.selectedEdges = [axis]
+                }
             }
             return o
         }

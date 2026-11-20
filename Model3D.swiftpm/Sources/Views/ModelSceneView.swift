@@ -333,7 +333,7 @@ struct ModelSceneView: UIViewRepresentable {
         private func pickEdge(at p: CGPoint, hit: SceneHit?) -> EdgeRef? {
             guard let view, !candidates.isEmpty else { return nil }
             let size = max(bounds.size.length, 10)
-            var found: [(EdgeRef, CGFloat, Vec3)] = []
+            var found: [(EdgeRef, CGFloat, Vec3, Bool)] = []
             for c in candidates {
                 let pts = c.points
                 let n = c.closed ? pts.count : pts.count - 1
@@ -359,12 +359,12 @@ struct ModelSceneView: UIViewRepresentable {
                     let nearEnd = ends.map { hypot($0.x - p.x, $0.y - p.y) }.min() ?? .infinity
                     if nearEnd < 34 { score += 30 }
                 }
-                found.append((c.ref, score, b.1))
+                found.append((c.ref, score, b.1, c.alwaysVisible))
             }
             found.sort { $0.1 < $1.1 }
             for f in found {
                 // 手前の面に隠れていないか(タップした面の点がエッジの近くにあるか)
-                if let h = hit, (h.point - f.2).length > size * 0.04 {
+                if !f.3, let h = hit, (h.point - f.2).length > size * 0.04 {
                     // 面の点のほうがカメラに近ければ隠れている
                     let cam = cameraNode.worldPosition
                     let camV = Vec3(Double(cam.x), Double(cam.y), Double(cam.z))

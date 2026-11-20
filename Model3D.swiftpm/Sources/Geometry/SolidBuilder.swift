@@ -24,12 +24,12 @@ enum SolidBuilder {
             }
             if f.kind.isRevolve {
                 // 回転・回転カット
-                guard let axis = f.sketch.shapes.first(where: { $0.kind == .centerline && $0.isValid }) else {
-                    messages.append("「\(f.name)」: 回転の軸にする中心線がスケッチにありません")
+                guard let axis = f.revolveAxis else {
+                    messages.append("「\(f.name)」: 回転軸を選んでください(スケッチの線をタップ)")
                     continue
                 }
                 guard let tool = revolveSolid(for: f, shapes: shapes, axis: axis) else {
-                    messages.append("「\(f.name)」: 輪郭が中心線をまたいでいます。中心線の片側に描いてください")
+                    messages.append("「\(f.name)」: 輪郭が回転軸をまたいでいます。軸の片側にある輪郭にしてください")
                     continue
                 }
                 if f.kind == .revolve {
@@ -346,7 +346,7 @@ enum SolidBuilder {
     static let revolveSegments = 48
 
     /// 中心線を軸にスケッチを回した形(輪郭が軸をまたぐと nil)
-    static func revolveSolid(for f: Feature, shapes: [SketchShape], axis: SketchShape) -> Solid? {
+    static func revolveSolid(for f: Feature, shapes: [SketchShape], axis: (Vec2, Vec2)) -> Solid? {
         let depth = nestingDepth(shapes)
         var body = Solid.empty
         var holes = Solid.empty
@@ -362,10 +362,10 @@ enum SolidBuilder {
     }
 
     /// 1つの輪郭を回す
-    static func revolve(shape: SketchShape, feature f: Feature, axis: SketchShape) -> [CSGPolygon]? {
+    static func revolve(shape: SketchShape, feature f: Feature, axis: (Vec2, Vec2)) -> [CSGPolygon]? {
         let plane = f.sketch.plane
-        let a = axis.points[0]
-        let d = (axis.points[1] - a).normalized
+        let a = axis.0
+        let d = (axis.1 - a).normalized
         var perp = Vec2(-d.y, d.x)
         let pts = Polygon2D.dedupe(ProfileGeometry.outline(shape))
         guard pts.count >= 3 else { return [] }
