@@ -23,9 +23,18 @@ struct SketchDrawing {
 
         // 図形(偶奇で塗ると、内側の図形が穴に見える)
         var all = Path()
-        for s in shapes where s.isValid { all.addPath(path(s, vp)) }
+        for s in shapes where s.isProfile { all.addPath(path(s, vp)) }
         ctx.fill(all, with: .color(.accentColor.opacity(0.10)), style: FillStyle(eoFill: true))
-        for s in shapes where s.isValid {
+        for s in shapes where s.isValid && s.kind == .centerline {
+            // 中心線(回転の軸)は一点鎖線
+            let selected = s.id == selection
+            var line = Path()
+            line.move(to: vp.toScreen(s.points[0]))
+            line.addLine(to: vp.toScreen(s.points[1]))
+            ctx.stroke(line, with: .color(selected ? .orange : .brown),
+                       style: StrokeStyle(lineWidth: selected ? 2.2 : 1.4, dash: [14, 4, 3, 4]))
+        }
+        for s in shapes where s.isProfile {
             let selected = s.id == selection
             ctx.stroke(path(s, vp), with: .color(selected ? .orange : .blue),
                        lineWidth: selected ? 2.5 : 1.6)
@@ -33,7 +42,7 @@ struct SketchDrawing {
         }
 
         if let p = previewShape, p.isValid {
-            ctx.stroke(path(p, vp), with: .color(.orange), style: StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
+            ctx.stroke(p.kind == .centerline ? linePath(p, vp) : path(p, vp), with: .color(.orange), style: StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
             drawLabels(&ctx, p, vp: vp)
         }
 
@@ -68,6 +77,13 @@ struct SketchDrawing {
         }
     }
 
+    func linePath(_ s: SketchShape, _ vp: SketchViewport) -> Path {
+        var p = Path()
+        p.move(to: vp.toScreen(s.points[0]))
+        p.addLine(to: vp.toScreen(s.points[1]))
+        return p
+    }
+
     func path(_ s: SketchShape, _ vp: SketchViewport) -> Path {
         var p = Path()
         let pts = ProfileGeometry.outline(s)
@@ -89,7 +105,7 @@ struct SketchDrawing {
             let c = vp.toScreen(s.points[0])
             ctx.draw(Text("⌀\(Format.mm(s.radius * 2))").font(.caption2).foregroundColor(.secondary),
                      at: c, anchor: .center)
-        case .polygon:
+        case .polygon, .centerline:
             break
         }
         // 角のR

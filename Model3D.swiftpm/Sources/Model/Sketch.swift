@@ -66,13 +66,14 @@ struct SketchPlane: Codable, Hashable {
 }
 
 enum ShapeKind: String, Codable {
-    case rectangle, circle, polygon
+    case rectangle, circle, polygon, centerline
 
     var label: String {
         switch self {
         case .rectangle: return "長方形"
         case .circle: return "円"
         case .polygon: return "多角形"
+        case .centerline: return "中心線"
         }
     }
 }
@@ -101,6 +102,13 @@ struct SketchShape: Codable, Identifiable, Hashable {
         return .rectangle(c - d, c + d)
     }
 
+    static func centerline(_ a: Vec2, _ b: Vec2) -> SketchShape {
+        SketchShape(kind: .centerline, points: [a, b])
+    }
+
+    /// 押し出し・回転に使う閉じた輪郭か(中心線は輪郭ではない)
+    var isProfile: Bool { kind != .centerline && isValid }
+
     static func polygon(_ pts: [Vec2]) -> SketchShape {
         SketchShape(kind: .polygon, points: pts, cornerRadii: Array(repeating: 0, count: pts.count))
     }
@@ -123,7 +131,7 @@ struct SketchShape: Codable, Identifiable, Hashable {
         case .rectangle:
             let a = rectMin, s = rectSize
             return [a, a + Vec2(s.x, 0), a + s, a + Vec2(0, s.y)]
-        case .circle:
+        case .circle, .centerline:
             return []
         case .polygon:
             return points
@@ -136,6 +144,8 @@ struct SketchShape: Codable, Identifiable, Hashable {
         case .circle:
             let c = points[0]
             return [c, c + Vec2(radius, 0), c + Vec2(-radius, 0), c + Vec2(0, radius), c + Vec2(0, -radius)]
+        case .centerline:
+            return points
         default:
             return corners
         }
@@ -146,6 +156,7 @@ struct SketchShape: Codable, Identifiable, Hashable {
         case .rectangle: return points.count == 2 && rectSize.x > 1e-6 && rectSize.y > 1e-6
         case .circle: return points.count == 1 && radius > 1e-6
         case .polygon: return points.count >= 3 && abs(Polygon2D.signedArea(points)) > 1e-9
+        case .centerline: return points.count == 2 && points[0].distance(to: points[1]) > 1e-6
         }
     }
 
@@ -222,6 +233,8 @@ enum ProfileGeometry {
     /// 同じ図形なら inset の値にかかわらず点の数が同じになる(押し出しの側面をつなぐため)。
     static func outline(_ shape: SketchShape, inset: Double = 0) -> [Vec2] {
         switch shape.kind {
+        case .centerline:
+            return shape.points
         case .circle:
             let c = shape.points[0]
             let r = max(shape.radius - inset, 1e-4)
@@ -317,6 +330,8 @@ enum ProfileGeometry {
         switch shape.kind {
         case .circle:
             return shape.radius - inset > 1e-3
+        case .centerline:
+            return true
         case .rectangle, .polygon:
             let base = ccwCorners(shape).pts
             return Polygon2D.offsetIsValid(base, Polygon2D.offset(base, by: inset))

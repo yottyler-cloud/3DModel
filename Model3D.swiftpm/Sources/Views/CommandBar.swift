@@ -60,6 +60,14 @@ struct CommandBar: View {
                           active: editor.session?.draft.kind == .cut || editor.awaiting == .feature(.cut)) {
                 editor.featureButton(.cut)
             }
+            CommandButton(title: "回転", symbol: FeatureKind.revolve.symbol,
+                          active: editor.session?.draft.kind == .revolve || editor.awaiting == .feature(.revolve)) {
+                editor.featureButton(.revolve)
+            }
+            CommandButton(title: "回転\nカット", symbol: FeatureKind.revolveCut.symbol,
+                          active: editor.session?.draft.kind == .revolveCut || editor.awaiting == .feature(.revolveCut)) {
+                editor.featureButton(.revolveCut)
+            }
             CommandButton(title: "フィレット", symbol: FeatureKind.fillet.symbol,
                           active: editor.session?.draft.kind == .fillet) {
                 editor.edgeFeatureButton(.fillet)

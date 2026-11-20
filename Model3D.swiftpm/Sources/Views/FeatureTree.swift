@@ -62,7 +62,7 @@ struct FeatureTree: View {
         let rolled = store.isRolledBack(f.id)
         let selected = editor.selection == .feature(f.id)
         Group {
-            if f.kind == .extrude || f.kind == .cut {
+            if f.kind.isSolidFeature {
                 DisclosureGroup(isExpanded: Binding(
                     get: { editor.expanded.contains(f.id) },
                     set: { if $0 { editor.expanded.insert(f.id) } else { editor.expanded.remove(f.id) } })
@@ -99,6 +99,14 @@ struct FeatureTree: View {
                 Button("押し出しカット") {
                     editor.selection = .feature(f.id)
                     editor.featureButton(.cut)
+                }
+                Button("回転") {
+                    editor.selection = .feature(f.id)
+                    editor.featureButton(.revolve)
+                }
+                Button("回転カット") {
+                    editor.selection = .feature(f.id)
+                    editor.featureButton(.revolveCut)
                 }
             }
             Button("名前の変更") {
@@ -149,6 +157,8 @@ struct FeatureTree: View {
         case .cut: return .pink
         case .fillet: return .orange
         case .chamfer: return .purple
+        case .revolve: return .teal
+        case .revolveCut: return .red
         }
     }
 

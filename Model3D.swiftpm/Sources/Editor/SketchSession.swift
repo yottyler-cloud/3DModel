@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SketchTool: String, CaseIterable, Identifiable {
-    case select, line, cornerRect, centerRect, circle, sketchFillet, sketchChamfer, dimension
+    case select, line, cornerRect, centerRect, circle, centerline, sketchFillet, sketchChamfer, dimension
     var id: String { rawValue }
 
     var label: String {
@@ -11,6 +11,7 @@ enum SketchTool: String, CaseIterable, Identifiable {
         case .cornerRect: return "コーナー矩形"
         case .centerRect: return "中心矩形"
         case .circle: return "円"
+        case .centerline: return "中心線"
         case .sketchFillet: return "スケッチフィレット"
         case .sketchChamfer: return "スケッチ面取り"
         case .dimension: return "スマート寸法"
@@ -24,6 +25,7 @@ enum SketchTool: String, CaseIterable, Identifiable {
         case .cornerRect: return "rectangle"
         case .centerRect: return "plus.rectangle"
         case .circle: return "circle"
+        case .centerline: return "arrow.up.and.down"
         case .sketchFillet: return "square.on.circle"
         case .sketchChamfer: return "righttriangle"
         case .dimension: return "ruler"
@@ -37,6 +39,7 @@ enum SketchTool: String, CaseIterable, Identifiable {
         case .cornerRect: return "1つ目の角から対角へドラッグ"
         case .centerRect: return "中心から角へドラッグ"
         case .circle: return "中心から外へドラッグ"
+        case .centerline: return "回転の軸: 始点から終点へドラッグ"
         case .sketchFillet: return "角をタップして丸める(もう一度で外す)"
         case .sketchChamfer: return "角をタップして面取り(もう一度で外す)"
         case .dimension: return "辺や円をタップして寸法を入力"
@@ -137,7 +140,7 @@ struct SketchSession {
     mutating func began(_ s: CGPoint, _ env: SketchEnv) {
         let vp = viewport(env.size)
         switch tool {
-        case .cornerRect, .centerRect, .circle:
+        case .cornerRect, .centerRect, .circle, .centerline:
             let p = snap(s, env)
             dragStart = p
             dragCurrent = p
@@ -157,7 +160,7 @@ struct SketchSession {
     mutating func moved(_ s: CGPoint, _ env: SketchEnv) {
         let vp = viewport(env.size)
         switch tool {
-        case .cornerRect, .centerRect, .circle:
+        case .cornerRect, .centerRect, .circle, .centerline:
             if dragStart != nil { dragCurrent = snap(s, env) }
         case .line:
             cursor = snap(s, env)
@@ -184,6 +187,13 @@ struct SketchSession {
                 if abs(a.x - b.x) > 1e-6 && abs(a.y - b.y) > 1e-6 {
                     addShape(tool == .cornerRect ? .rectangle(a, b) : .centerRectangle(center: a, corner: b))
                 }
+            }
+            dragStart = nil
+            dragCurrent = nil
+        case .centerline:
+            if let a = dragStart {
+                let b = snap(s, env)
+                if a.distance(to: b) > 1e-6 { addShape(.centerline(a, b)) }
             }
             dragStart = nil
             dragCurrent = nil
@@ -320,6 +330,8 @@ struct SketchSession {
                 let d = abs(w.distance(to: shape.points[0]) - shape.radius)
                 consider(DimensionEdit(shapeID: shape.id, kind: .diameter, title: "直径",
                                        text: Format.mm(shape.radius * 2)), d)
+            case .centerline:
+                break
             case .polygon:
                 let p = shape.points
                 for i in p.indices {

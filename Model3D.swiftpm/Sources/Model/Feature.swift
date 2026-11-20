@@ -1,7 +1,16 @@
 import Foundation
 
 enum FeatureKind: String, Codable {
-    case sketch, extrude, cut, fillet, chamfer
+    case sketch, extrude, cut, fillet, chamfer, revolve, revolveCut
+
+    /// 回転(中心線を軸にスケッチを回す)
+    var isRevolve: Bool { self == .revolve || self == .revolveCut }
+    /// 形を足すフィーチャー
+    var isAdditive: Bool { self == .extrude || self == .revolve }
+    /// 形を削るフィーチャー
+    var isSubtractive: Bool { self == .cut || self == .revolveCut }
+    /// 押し出し・カット・回転(スケッチから形をつくるもの)
+    var isSolidFeature: Bool { isAdditive || isSubtractive }
 
     /// エッジを選んで使うフィーチャー(フィレット・面取り)
     var isEdgeFeature: Bool { self == .fillet || self == .chamfer }
@@ -13,6 +22,8 @@ enum FeatureKind: String, Codable {
         case .cut: return "押し出しカット"
         case .fillet: return "フィレット"
         case .chamfer: return "面取り"
+        case .revolve: return "回転"
+        case .revolveCut: return "回転カット"
         }
     }
 
@@ -23,6 +34,8 @@ enum FeatureKind: String, Codable {
         case .cut: return "square.stack.3d.down.dottedline"
         case .fillet: return "app.connected.to.app.below.fill"
         case .chamfer: return "righttriangle"
+        case .revolve: return "arrow.triangle.2.circlepath"
+        case .revolveCut: return "arrow.triangle.2.circlepath.circle"
         }
     }
 }
@@ -107,6 +120,10 @@ struct Feature: Codable, Identifiable, Hashable {
                 let sep = kind == .extrude && !mergeResult ? " 別ボディ" : ""
                 return "\(Format.mm(distance)) mm\(reversed ? " 反対" : "")\(sep)"
             }
+        case .revolve, .revolveCut:
+            let sep = kind == .revolve && !mergeResult ? " 別ボディ" : ""
+            let mid = endCondition == .midPlane ? " 両側" : (reversed ? " 反対" : "")
+            return "\(Format.mm(distance))°\(mid)\(sep)"
         case .fillet:
             return "R\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"
         case .chamfer:

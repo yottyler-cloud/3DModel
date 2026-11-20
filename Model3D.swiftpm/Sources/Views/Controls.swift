@@ -112,6 +112,15 @@ struct ShapeEditorSection: View {
                     get: { shape.points[0].y }, set: { shape.points[0].y = $0 }))
                 NumberField(label: "直径", value: Binding(
                     get: { shape.radius * 2 }, set: { shape.radius = max($0 / 2, 0.001) }))
+            case .centerline:
+                NumberField(label: "始点 X", value: Binding(
+                    get: { shape.points[0].x }, set: { shape.points[0].x = $0 }))
+                NumberField(label: "始点 Y", value: Binding(
+                    get: { shape.points[0].y }, set: { shape.points[0].y = $0 }))
+                NumberField(label: "終点 X", value: Binding(
+                    get: { shape.points[1].x }, set: { shape.points[1].x = $0 }))
+                NumberField(label: "終点 Y", value: Binding(
+                    get: { shape.points[1].y }, set: { shape.points[1].y = $0 }))
             case .polygon:
                 ForEach(shape.points.indices, id: \.self) { i in
                     HStack {

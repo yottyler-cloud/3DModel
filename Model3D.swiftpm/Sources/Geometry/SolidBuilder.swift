@@ -17,9 +17,36 @@ enum SolidBuilder {
         var bodies: [Solid] = []
         var messages: [String] = []
         for f in effective(features) {
-            let shapes = f.sketch.shapes.filter { $0.isValid }
+            let shapes = f.sketch.shapes.filter { $0.isProfile }
             if shapes.isEmpty {
                 messages.append("「\(f.name)」: スケッチに閉じた図形がありません")
+                continue
+            }
+            if f.kind.isRevolve {
+                // 回転・回転カット
+                guard let axis = f.sketch.shapes.first(where: { $0.kind == .centerline && $0.isValid }) else {
+                    messages.append("「\(f.name)」: 回転の軸にする中心線がスケッチにありません")
+                    continue
+                }
+                guard let tool = revolveSolid(for: f, shapes: shapes, axis: axis) else {
+                    messages.append("「\(f.name)」: 輪郭が中心線をまたいでいます。中心線の片側に描いてください")
+                    continue
+                }
+                if f.kind == .revolve {
+                    if f.mergeResult {
+                        var merged = tool
+                        var rest: [Solid] = []
+                        for b in bodies {
+                            if b.bounds.intersects(tool.bounds, margin: 1e-4) { merged = b.union(merged) } else { rest.append(b) }
+                        }
+                        bodies = rest + [merged]
+                    } else {
+                        bodies.append(tool)
+                    }
+                } else {
+                    if bodies.isEmpty { messages.append("「\(f.name)」: 削る形がまだありません") }
+                    bodies = bodies.map { $0.subtract(tool) }.filter { !$0.isEmpty }
+                }
                 continue
             }
             switch f.kind {
@@ -98,7 +125,7 @@ enum SolidBuilder {
                 }
             }
         }
-        return fs.filter { $0.kind == .extrude || $0.kind == .cut }
+        return fs.filter { $0.kind.isSolidFeature }
     }
 
     /// 押し出し・カットの範囲(スケッチ面からの高さ)
@@ -269,6 +296,88 @@ enum SolidBuilder {
                 }
             }
         }
+        return polys
+    }
+
+    static let revolveSegments = 48
+
+    /// 中心線を軸にスケッチを回した形(輪郭が軸をまたぐと nil)
+    static func revolveSolid(for f: Feature, shapes: [SketchShape], axis: SketchShape) -> Solid? {
+        let depth = nestingDepth(shapes)
+        var body = Solid.empty
+        var holes = Solid.empty
+        for i in shapes.indices {
+            guard let polys = revolve(shape: shapes[i], feature: f, axis: axis) else { return nil }
+            if depth[i] % 2 == 0 {
+                body = body.union(Solid(polygons: polys))
+            } else {
+                holes = holes.union(Solid(polygons: polys))
+            }
+        }
+        return body.subtract(holes)
+    }
+
+    /// 1つの輪郭を回す
+    static func revolve(shape: SketchShape, feature f: Feature, axis: SketchShape) -> [CSGPolygon]? {
+        let plane = f.sketch.plane
+        let a = axis.points[0]
+        let d = (axis.points[1] - a).normalized
+        var perp = Vec2(-d.y, d.x)
+        let pts = Polygon2D.dedupe(ProfileGeometry.outline(shape))
+        guard pts.count >= 3 else { return [] }
+        // 軸からの距離(片側にあること)
+        var radial = pts.map { ($0 - a).dot(perp) }
+        let eps = 1e-6
+        if (radial.max() ?? 0) <= eps {
+            perp = -perp
+            radial = radial.map { -$0 }
+        }
+        if (radial.min() ?? 0) < -eps { return nil }
+        let along = pts.map { ($0 - a).dot(d) }
+        let e1 = plane.u * perp.x + plane.v * perp.y
+        let e2 = plane.normal
+
+        let total = max(0.1, min(f.distance, 360)) * Double.pi / 180
+        let full = total >= 2 * Double.pi - 1e-9
+        var start = 0.0
+        if f.endCondition == .midPlane {
+            start = -total / 2
+        } else if f.reversed {
+            start = -total
+        }
+        let steps = full ? revolveSegments : max(2, Int((Double(revolveSegments) * total / (2 * Double.pi)).rounded(.up)))
+        func point(_ i: Int, _ k: Int) -> Vec3 {
+            let ang = start + total * Double(k) / Double(steps)
+            let base = plane.point(a + d * along[i])
+            return base + (e1 * cos(ang) + e2 * sin(ang)) * max(radial[i], 0)
+        }
+        var polys: [CSGPolygon] = []
+        func addTri(_ p: Vec3, _ q: Vec3, _ r: Vec3) {
+            if let poly = CSGPolygon(vertices: [p, q, r]) { polys.append(poly) }
+        }
+        let n = pts.count
+        for k in 0..<steps {
+            let k2 = full && k == steps - 1 ? 0 : k + 1
+            for i in 0..<n {
+                let j = (i + 1) % n
+                addTri(point(i, k), point(j, k), point(j, k2))
+                addTri(point(i, k), point(j, k2), point(i, k2))
+            }
+        }
+        if !full {
+            // 回し始めと回し終わりの断面
+            for t in Polygon2D.triangulate(pts) {
+                addTri(point(t.0, 0), point(t.2, 0), point(t.1, 0))
+                addTri(point(t.0, steps), point(t.1, steps), point(t.2, steps))
+            }
+        }
+        // 向き(外向き)を体積の符号でそろえる
+        var vol = 0.0
+        for p in polys {
+            let v = p.vertices
+            vol += v[0].dot(v[1].cross(v[2]))
+        }
+        if vol < 0 { polys = polys.map { $0.flipped() } }
         return polys
     }
 

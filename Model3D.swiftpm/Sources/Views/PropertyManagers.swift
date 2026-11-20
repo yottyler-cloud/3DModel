@@ -19,6 +19,8 @@ struct LeftPanel: View {
             } else if let s = editor.session {
                 if s.draft.kind.isEdgeFeature {
                     FilletPropertyManager()
+                } else if s.draft.kind.isRevolve {
+                    RevolvePropertyManager()
                 } else {
                     ExtrudePropertyManager()
                 }
@@ -247,6 +249,82 @@ struct SketchPropertyManager: View {
         case .rectangle: return "\(Format.mm(s.rectSize.x)) × \(Format.mm(s.rectSize.y))"
         case .circle: return "⌀\(Format.mm(s.radius * 2))"
         case .polygon: return "\(s.points.count) 頂点"
+        case .centerline: return "長さ \(Format.mm(s.points[0].distance(to: s.points[1])))"
+        }
+    }
+}
+
+/// 回転・回転カット
+struct RevolvePropertyManager: View {
+    @EnvironmentObject var editor: Editor
+
+    var body: some View {
+        let draft = editor.session?.draft
+        let kind = draft?.kind ?? .revolve
+        let hasAxis = draft?.sketch.shapes.contains { $0.kind == .centerline && $0.isValid } ?? false
+        VStack(spacing: 0) {
+            PMHeader(title: draft?.name ?? "", symbol: kind.symbol,
+                     onOK: { editor.confirmFeature() }, onCancel: { editor.cancelFeature() })
+            Form {
+                Section("名前") {
+                    TextField("名前", text: editor.draft(\.name, ""))
+                }
+                Section {
+                    if hasAxis {
+                        Label("スケッチの中心線", systemImage: "checkmark.circle").foregroundStyle(.green)
+                    } else {
+                        Label("中心線がありません", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                        Button("スケッチを編集して中心線を描く") {
+                            if let id = editor.session?.replacing {
+                                editor.cancelFeature()
+                                editor.editSketch(id)
+                                editor.sketch?.tool = .centerline
+                            }
+                        }
+                    }
+                } header: {
+                    Text("回転軸")
+                } footer: {
+                    Text("輪郭は中心線の片側に描きます。中心線に接していてもかまいません。")
+                }
+                Section("方向 1") {
+                    Picker("回転のしかた", selection: Binding(
+                        get: { editor.session?.draft.endCondition == .midPlane },
+                        set: { editor.session?.draft.endCondition = $0 ? .midPlane : .blind })) {
+                        Text("片側").tag(false)
+                        Text("両側対称").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    if draft?.endCondition != .midPlane {
+                        Button {
+                            editor.session?.draft.reversed.toggle()
+                        } label: {
+                            Label("反対方向", systemImage: "arrow.uturn.left.circle")
+                        }
+                        .foregroundStyle(draft?.reversed == true ? Color.orange : Color.accentColor)
+                    }
+                    NumberField(label: "角度", value: Binding(
+                        get: { editor.session?.draft.distance ?? 360 },
+                        set: { editor.session?.draft.distance = min(max($0, 0.1), 360) }), unit: "°")
+                    HStack {
+                        ForEach([90.0, 180, 270, 360], id: \.self) { a in
+                            Button("\(Int(a))°") { editor.session?.draft.distance = a }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                }
+                if kind == .revolve {
+                    Section {
+                        Toggle("元の形とつなげる(結果をマージ)", isOn: editor.draft(\.mergeResult, true))
+                    } header: {
+                        Text("ボディ")
+                    }
+                }
+                Section("スケッチ") {
+                    LabeledContent("使うスケッチ", value: draft?.sketchName ?? "")
+                    LabeledContent("平面", value: draft?.sketch.plane.name ?? "")
+                }
+            }
         }
     }
 }

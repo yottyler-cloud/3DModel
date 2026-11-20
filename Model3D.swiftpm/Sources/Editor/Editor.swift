@@ -119,7 +119,7 @@ final class Editor: ObservableObject {
         awaiting = nil
         switch pending {
         case .sketch(let tool): startSketch(on: plane, tool: tool, continueWith: nil)
-        case .feature(let k): startSketch(on: plane, tool: .cornerRect, continueWith: k)
+        case .feature(let k): startSketch(on: plane, tool: k.isRevolve ? .centerline : .cornerRect, continueWith: k)
         }
     }
 
@@ -189,7 +189,7 @@ final class Editor: ObservableObject {
             tab = .features
             return
         }
-        let valid = s.shapes.contains { $0.isValid }
+        let valid = s.shapes.contains { $0.isProfile }
         if s.isNew {
             guard valid else {
                 tab = .features
@@ -271,8 +271,8 @@ final class Editor: ObservableObject {
             }
             return
         }
-        if kind == .cut && store.mesh.positions.isEmpty {
-            flash("先に押し出しで形をつくってください")
+        if kind.isSubtractive && store.mesh.positions.isEmpty {
+            flash("先に押し出しか回転で形をつくってください")
             return
         }
         if case .feature(let id)? = selection, let f = store.feature(id), f.kind == .sketch {
@@ -281,7 +281,7 @@ final class Editor: ObservableObject {
             && !store.isRolledBack($0.id) }) {
             beginFeature(kind: kind, sketchFeature: f)
         } else if let p = selection?.sketchPlane {
-            startSketch(on: p, tool: .cornerRect, continueWith: kind)
+            startSketch(on: p, tool: kind.isRevolve ? .centerline : .cornerRect, continueWith: kind)
         } else {
             awaiting = .feature(kind)
         }
@@ -292,8 +292,14 @@ final class Editor: ObservableObject {
         var f = Feature(name: store.nextName(kind), kind: kind)
         f.sketch = sk.sketch
         f.sketchName = sk.sketchName.isEmpty ? sk.name : sk.sketchName
-        // 形がある側を見て、向きを決める(押し出しは形の外へ、カットは形の中へ)
-        if let r = store.mesh.range(along: sk.sketch.plane) {
+        if kind.isRevolve {
+            // 回転: 360°が初期値(distance を角度として使う)
+            f.distance = 360
+            if !sk.sketch.shapes.contains(where: { $0.kind == .centerline && $0.isValid }) {
+                flash("回転の軸にする中心線をスケッチに描いてください")
+            }
+        } else if let r = store.mesh.range(along: sk.sketch.plane) {
+            // 形がある側を見て、向きを決める(押し出しは形の外へ、カットは形の中へ)
             let onPositive = r.max > 1e-6
             let onNegative = r.min < -1e-6
             if kind == .cut {
@@ -425,8 +431,8 @@ final class Editor: ObservableObject {
 
     static func candidates(for features: [Feature], mesh: TriMesh) -> [EdgeCandidate] {
         var out: [EdgeCandidate] = []
-        for f in features {
-            let shapes = f.sketch.shapes.filter { $0.isValid }
+        for f in features where f.kind == .extrude || f.kind == .cut {
+            let shapes = f.sketch.shapes.filter { $0.isProfile }
             if shapes.isEmpty { continue }
             let plane = f.sketch.plane
             var (h0, h1, atBottom) = SolidBuilder.extent(of: f)
