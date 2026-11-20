@@ -274,18 +274,29 @@ enum ProfileGeometry {
                 let iPrev = (i + n - 1) % n, iNext = (i + 1) % n
                 let shareA = radii[iPrev] > 0 || chamfers[iPrev] > 0 ? 0.5 : 1.0
                 let shareB = radii[iNext] > 0 || chamfers[iNext] > 0 ? 0.5 : 1.0
-                // この角をはさむ2辺のずらし量の平均
-                let d = (o[iPrev] + o[i]) / 2
+                // 角の面(面取り・R)のずらし量: 2辺とも同じ向きにずらすときだけ、小さいほうに合わせる。
+                // 片側の辺だけなら角の面はそのまま残り、辺の面取りは角の面にぶつかって止まる
+                let oa = o[iPrev], ob = o[i]
+                let d: Double = oa * ob > 0 ? (abs(oa) < abs(ob) ? oa : ob) : 0
                 if chamfers[i] > 0 && radii[i] <= 0 {
-                    // 面取り: ずらした分だけ、角からの長さを直す
-                    let d1 = (prev - p).normalized, d2 = (next - p).normalized
-                    let half = acos(max(-1, min(1, d1.dot(d2)))) / 2
-                    var t = chamfers[i]
-                    if abs(d) > 1e-12, sin(half) > 1e-6, cos(half) > 1e-6 {
-                        let shift = (d - d / sin(half)) / cos(half)
-                        t = convex ? t + shift : t - shift
+                    // 面取りの角: 元の角の面の直線をずらし、ずらした2辺との交点を端にする
+                    let bp = base[i], bPrev = base[iPrev], bNext = base[iNext]
+                    let la = (bPrev - bp).length, lb = (bNext - bp).length
+                    let t = min(chamfers[i], min(la * shareA, lb * shareB) * 0.999)
+                    if t > 1e-9 {
+                        let t1 = bp + (bPrev - bp).normalized * t
+                        let t2 = bp + (bNext - bp).normalized * t
+                        let na = (bp - bPrev).normalized.perp
+                        let nb = (bNext - bp).normalized.perp
+                        let nf = (t2 - t1).normalized.perp
+                        if let q1 = intersect(na, na.dot(bp) + oa, nf, nf.dot(t1) + d),
+                           let q2 = intersect(nf, nf.dot(t1) + d, nb, nb.dot(bp) + ob) {
+                            let count = arcSegments + 1
+                            out.append(contentsOf: (0..<count).map { q1 + (q2 - q1) * (Double($0) / Double(count - 1)) })
+                            continue
+                        }
                     }
-                    out.append(contentsOf: chamferCorner(prev: prev, p: p, next: next, setback: max(t, 0),
+                    out.append(contentsOf: chamferCorner(prev: prev, p: p, next: next, setback: 0,
                                                          shareA: shareA, shareB: shareB))
                     continue
                 }
@@ -299,6 +310,13 @@ enum ProfileGeometry {
             }
             return out
         }
+    }
+
+    /// 2直線 n1·x = c1, n2·x = c2 の交点
+    static func intersect(_ n1: Vec2, _ c1: Double, _ n2: Vec2, _ c2: Double) -> Vec2? {
+        let det = n1.x * n2.y - n1.y * n2.x
+        guard abs(det) > 1e-9 else { return nil }
+        return Vec2((c1 * n2.y - n1.y * c2) / det, (n1.x * c2 - c1 * n2.x) / det)
     }
 
     /// 反時計回りの多角形の各辺を、辺ごとの量だけ内側へずらした多角形(角は2辺の交点)。
