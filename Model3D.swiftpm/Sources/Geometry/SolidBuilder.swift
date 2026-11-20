@@ -78,7 +78,8 @@ enum SolidBuilder {
 
     /// 押し出しのスケッチ面側(始まりの面)に、ほかの形が接しているか
     static func startTouchesBody(_ f: Feature, bodies: [Solid]) -> Bool {
-        guard f.startFillet > 0, f.endCondition != .midPlane, !bodies.isEmpty else { return false }
+        let hasStart = f.startFillet > 0 || (f.sideTreatments ?? []).contains { !$0.atEnd && $0.size > 0 }
+        guard hasStart, f.endCondition != .midPlane, !bodies.isEmpty else { return false }
         let (h0, h1, atBottom) = extent(of: f)
         let plane = f.sketch.plane
         let eps = 1e-4
@@ -114,6 +115,11 @@ enum SolidBuilder {
                 case .end:
                     fs[i].endFillet = r
                     fs[i].endIsChamfer = isChamfer
+                case .side(_, let shapeID, let k, let atEnd):
+                    var list = fs[i].sideTreatments ?? []
+                    list.removeAll { $0.shapeID == shapeID && $0.side == k && $0.atEnd == atEnd }
+                    list.append(SideTreatment(shapeID: shapeID, side: k, atEnd: atEnd, size: r, chamfer: isChamfer))
+                    fs[i].sideTreatments = list
                 case .corner(_, let shapeID, let k):
                     if let j = fs[i].sketch.shapes.firstIndex(where: { $0.id == shapeID }) {
                         if isChamfer {
@@ -155,119 +161,158 @@ enum SolidBuilder {
         return depth
     }
 
+    /// 端のふちの丸め・面取り(辺ごと)
+    struct EndTreatment: Equatable {
+        var size: Double = 0
+        var chamfer = false
+        /// 外側へ広げる(カットの入口・付け根のすみ)
+        var flare = false
+        static let none = EndTreatment()
+    }
+
     /// その特徴が足す(または削る)形
     static func toolSolid(for f: Feature, shapes: [SketchShape], startConcave: Bool = false) -> Solid {
         let depth = nestingDepth(shapes)
         let (h0, h1, sketchAtBottom) = extent(of: f)
         let isMid = f.endCondition == .midPlane
-        // フィレットを下端(h0)・上端(h1)へ割り当てる
-        let startR = f.startFillet, endR = f.endFillet
-        let startC = f.startIsChamfer ?? false, endC = f.endIsChamfer ?? false
-        var bottomR = sketchAtBottom ? startR : endR
-        var topR = sketchAtBottom ? endR : startR
-        var bottomC = sketchAtBottom ? startC : endC
-        var topC = sketchAtBottom ? endC : startC
-        if isMid {
-            // 中間平面のときは両端とも「先端」
-            bottomR = endR
-            topR = endR
-            bottomC = endC
-            topC = endC
-        }
-        // カット: 入口(スケッチ面側)のふちは凸 → 道具を外へ広げる。先端(底)は道具を内へ丸める
         let isCut = f.kind == .cut
-        let bottomIsEntry = isCut && sketchAtBottom && !isMid
-        let topIsEntry = isCut && !sketchAtBottom
         let throughAll = isCut && f.endCondition == .throughAll
+        let plane = f.sketch.plane
+        let sides = f.sideTreatments ?? []
+
+        // 下端(h0)・上端(h1)が、スケッチ面側(start)か先端側(end)か
+        let bottomIsEnd = isMid || !sketchAtBottom
+        let topIsEnd = isMid || sketchAtBottom
+        // 外へ広げる端: カットの入口(スケッチ面側)、付け根が元の形に接している押し出しのスケッチ面側
+        let bottomFlare = !bottomIsEnd && (isCut || startConcave)
+        let topFlare = !topIsEnd && (isCut || startConcave)
+
+        func treatments(_ shape: SketchShape, bottom: Bool) -> [EndTreatment] {
+            let isEnd = bottom ? bottomIsEnd : topIsEnd
+            let flare = bottom ? bottomFlare : topFlare
+            // 貫通カットの先は丸めない
+            if throughAll && isEnd { return Array(repeating: .none, count: ProfileGeometry.sideCount(shape)) }
+            let size = isEnd ? f.endFillet : f.startFillet
+            let chamfer = isEnd ? (f.endIsChamfer ?? false) : (f.startIsChamfer ?? false)
+            var list = Array(repeating: EndTreatment(size: size, chamfer: chamfer, flare: flare),
+                             count: ProfileGeometry.sideCount(shape))
+            for t in sides where t.shapeID == shape.id && t.atEnd == isEnd && t.side < list.count {
+                list[t.side] = EndTreatment(size: t.size, chamfer: t.chamfer, flare: flare)
+            }
+            return list
+        }
 
         var body = Solid.empty
         var holes = Solid.empty
         let ext = 0.01
-        for i in shapes.indices {
+        for (i, shape) in shapes.enumerated() {
             if depth[i] % 2 == 0 {
-                var bR = bottomR, tR = topR
-                if throughAll {
-                    // 貫通する側の先端は丸めない
-                    if !bottomIsEntry { bR = 0 }
-                    if !topIsEntry { tR = 0 }
-                }
-                // 押し出しの付け根(元の形に接するスケッチ面側)は外へ広げて、すみRにする
-                let bConcave = startConcave && sketchAtBottom
-                let tConcave = startConcave && !sketchAtBottom
                 body = body.union(Solid(polygons: prism(
-                    shape: shapes[i], plane: f.sketch.plane, h0: h0, h1: h1,
-                    bottomR: bR, topR: tR,
-                    bottomFlare: (isCut && bottomIsEntry) || bConcave,
-                    topFlare: (isCut && topIsEntry) || tConcave,
-                    bottomChamfer: bottomC, topChamfer: topC)))
+                    shape: shape, plane: plane, h0: h0, h1: h1,
+                    bottom: treatments(shape, bottom: true), top: treatments(shape, bottom: false))))
             } else if isCut {
                 // カットの中の島
                 holes = holes.union(Solid(polygons: prism(
-                    shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
-                    bottomR: 0, topR: 0, bottomFlare: false, topFlare: false)))
+                    shape: shape, plane: plane, h0: h0 - ext, h1: h1 + ext, bottom: [], top: [])))
             } else {
-                // 押し出しの中の穴(外へ広げた道具で、穴の入口のふちも丸める)
-                // (付け根が元の形に接している側は、穴のふちにならないので丸めない)
-                let bR = startConcave && sketchAtBottom ? 0 : bottomR
-                let tR = startConcave && !sketchAtBottom ? 0 : topR
+                // 押し出しの中の穴: 外へ広げた道具で、穴の入口のふちも丸める
+                // (付け根が元の形に接している側は穴のふちにならないので、そのまま)
+                func holeEnd(_ bottom: Bool) -> [EndTreatment] {
+                    let flareSide = bottom ? bottomFlare : topFlare
+                    if startConcave && flareSide { return [] }
+                    let isEnd = bottom ? bottomIsEnd : topIsEnd
+                    let size = isEnd ? f.endFillet : f.startFillet
+                    let chamfer = isEnd ? (f.endIsChamfer ?? false) : (f.startIsChamfer ?? false)
+                    guard size > 0 else { return [] }
+                    return [EndTreatment(size: size + ext, chamfer: chamfer, flare: true)]
+                }
                 holes = holes.union(Solid(polygons: prism(
-                    shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
-                    bottomR: bR > 0 ? bR + ext : 0, topR: tR > 0 ? tR + ext : 0,
-                    bottomFlare: true, topFlare: true,
-                    bottomChamfer: bottomC, topChamfer: topC)))
+                    shape: shape, plane: plane, h0: h0 - ext, h1: h1 + ext,
+                    bottom: holeEnd(true), top: holeEnd(false))))
             }
         }
         return body.subtract(holes)
     }
 
-    /// 図形を h0〜h1 まで押し出した柱。端のエッジを半径Rで丸められる。
-    /// flare = true のときは丸めの向きが外側(穴の入口を丸めるための道具形状)。
+    /// 図形を h0〜h1 まで押し出した柱。両端のふちを、辺ごとに丸め・面取りできる。
+    /// bottom・top は図形の辺の番号順(足りない分は何もしない。1つだけなら全部の辺に使う)
     static func prism(shape: SketchShape, plane: SketchPlane, h0: Double, h1: Double,
-                      bottomR: Double, topR: Double, bottomFlare: Bool, topFlare: Bool,
-                      bottomChamfer: Bool = false, topChamfer: Bool = false) -> [CSGPolygon] {
+                      bottom: [EndTreatment], top: [EndTreatment]) -> [CSGPolygon] {
         let height = h1 - h0
-        guard height > 1e-9 else { return [] }
-        var rb = max(0, bottomR), rt = max(0, topR)
-        if rb + rt > height * 0.999 {
-            let s = height * 0.999 / (rb + rt)
-            rb *= s
-            rt *= s
+        let n = ProfileGeometry.sideCount(shape)
+        guard height > 1e-9, n > 0 else { return [] }
+        func expand(_ t: [EndTreatment]) -> [EndTreatment] {
+            if t.count == 1 { return Array(repeating: t[0], count: n) }
+            return (0..<n).map { $0 < t.count ? t[$0] : .none }
         }
-        // 内側へ丸めるときは、形がつぶれない大きさまで小さくする
-        if !bottomFlare { rb = limitInset(shape, rb) }
-        if !topFlare { rt = limitInset(shape, rt) }
+        var bot = expand(bottom), tp = expand(top)
 
-        // 段(高さ, 内側へのずらし量)
-        var rings: [(h: Double, inset: Double)] = []
+        // 上下の丸めが重ならないように
+        let bm = bot.map(\.size).max() ?? 0, tm = tp.map(\.size).max() ?? 0
+        if bm + tm > height * 0.999 {
+            let s = height * 0.999 / (bm + tm)
+            for i in 0..<n { bot[i].size *= s; tp[i].size *= s }
+        }
+        // 内側へずらす量が大きすぎて形がつぶれるなら、小さくする
+        var tries = 0
+        while tries < 40 {
+            let inward = (0..<n).map { i in
+                max(bot[i].flare ? 0 : bot[i].size, tp[i].flare ? 0 : tp[i].size)
+            }
+            if inward.allSatisfy({ $0 < 1e-9 }) || ProfileGeometry.insetIsValid(shape, sideInsets: inward) { break }
+            for i in 0..<n {
+                if !bot[i].flare { bot[i].size *= 0.85 }
+                if !tp[i].flare { tp[i].size *= 0.85 }
+            }
+            tries += 1
+        }
+        if tries >= 40 {
+            for i in 0..<n {
+                if !bot[i].flare { bot[i].size = 0 }
+                if !tp[i].flare { tp[i].size = 0 }
+            }
+        }
+
+        // 端からの距離 u での、ずらし量
+        func profile(_ t: EndTreatment, _ u: Double) -> Double {
+            guard t.size > 1e-6, u < t.size - 1e-12 else { return 0 }
+            let v = t.chamfer ? t.size - u : t.size - (max(0, t.size * t.size - (t.size - u) * (t.size - u))).squareRoot()
+            return t.flare ? -v : v
+        }
+        func insets(at h: Double) -> [Double] {
+            (0..<n).map { i in profile(bot[i], h - h0) + profile(tp[i], h1 - h) }
+        }
+
+        // 段の高さ
+        var hs: [Double] = [h0, h1]
         let steps = filletSteps
-        if rb > 1e-6 && bottomChamfer {
-            // 面取り: 斜めの1段
-            rings.append((h0, (bottomFlare ? -1.0 : 1.0) * rb))
-        } else if rb > 1e-6 {
-            let sign = bottomFlare ? -1.0 : 1.0
-            for k in 0..<steps {
-                let phi = Double.pi / 2 * Double(k) / Double(steps)
-                rings.append((h0 + rb * (1 - cos(phi)), sign * rb * (1 - sin(phi))))
+        for t in Set(bot.filter { $0.size > 1e-6 }.map { [$0.size, $0.chamfer ? 1 : 0] }) {
+            let size = t[0]
+            if t[1] == 1 {
+                hs.append(h0 + size)
+            } else {
+                for k in 1...steps { hs.append(h0 + size * (1 - cos(Double.pi / 2 * Double(k) / Double(steps)))) }
             }
         }
-        rings.append((h0 + rb, 0))
-        if height - rb - rt > 1e-6 || rings.count == 1 {
-            rings.append((h1 - rt, 0))
-        }
-        if rt > 1e-6 && topChamfer {
-            rings.append((h1, (topFlare ? -1.0 : 1.0) * rt))
-        } else if rt > 1e-6 {
-            let sign = topFlare ? -1.0 : 1.0
-            for k in 1...steps {
-                let phi = Double.pi / 2 * Double(k) / Double(steps)
-                rings.append((h1 - rt + rt * sin(phi), sign * rt * (1 - cos(phi))))
+        for t in Set(tp.filter { $0.size > 1e-6 }.map { [$0.size, $0.chamfer ? 1 : 0] }) {
+            let size = t[0]
+            if t[1] == 1 {
+                hs.append(h1 - size)
+            } else {
+                for k in 1...steps { hs.append(h1 - size * (1 - cos(Double.pi / 2 * Double(k) / Double(steps)))) }
             }
         }
-        if rings.count < 2 { return [] }
+        hs.sort()
+        var heights: [Double] = []
+        for h in hs where h >= h0 - 1e-12 && h <= h1 + 1e-12 {
+            if let last = heights.last, h - last < 1e-7 { continue }
+            heights.append(h)
+        }
+        if let last = heights.last, abs(last - h1) > 1e-9 { heights.append(h1) }
+        guard heights.count >= 2 else { return [] }
 
-        let loops = rings.map { ring in
-            ProfileGeometry.outline(shape, inset: ring.inset).map { plane.point($0, height: ring.h) }
-        }
+        let loops2 = heights.map { ProfileGeometry.outline(shape, sideInsets: insets(at: $0)) }
+        let loops = zip(heights, loops2).map { h, l in l.map { plane.point($0, height: h) } }
         var polys: [CSGPolygon] = []
         func addTri(_ a: Vec3, _ b: Vec3, _ c: Vec3) {
             if let p = CSGPolygon(vertices: [a, b, c]) { polys.append(p) }
@@ -275,19 +320,18 @@ enum SolidBuilder {
         // 側面
         for k in 0..<(loops.count - 1) {
             let lower = loops[k], upper = loops[k + 1]
-            let n = lower.count
-            for i in 0..<n {
-                let j = (i + 1) % n
+            let m = lower.count
+            for i in 0..<m {
+                let j = (i + 1) % m
                 addTri(lower[i], lower[j], upper[j])
                 addTri(lower[i], upper[j], upper[i])
             }
         }
         // ふた(両端の面)
-        for (index, isTop) in [(0, false), (rings.count - 1, true)] {
-            let ring = rings[index]
-            let pts2 = Polygon2D.dedupe(ProfileGeometry.outline(shape, inset: ring.inset))
+        for (index, isTop) in [(0, false), (heights.count - 1, true)] {
+            let pts2 = Polygon2D.dedupe(loops2[index])
             guard pts2.count >= 3 else { continue }
-            let pts3 = pts2.map { plane.point($0, height: ring.h) }
+            let pts3 = pts2.map { plane.point($0, height: heights[index]) }
             for t in Polygon2D.triangulate(pts2) {
                 if isTop {
                     addTri(pts3[t.0], pts3[t.1], pts3[t.2])

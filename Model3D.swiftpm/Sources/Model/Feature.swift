@@ -62,10 +62,12 @@ enum EdgeRef: Codable, Hashable {
     case end(UUID)
     /// 図形の角から伸びるエッジ(特徴, 図形, 角の番号)
     case corner(UUID, UUID, Int)
+    /// 端のふちのうち1辺だけ(特徴, 図形, 辺の番号, 先端側なら true)
+    case side(UUID, UUID, Int, Bool)
 
     var featureID: UUID {
         switch self {
-        case .start(let id), .end(let id), .corner(let id, _, _): return id
+        case .start(let id), .end(let id), .corner(let id, _, _), .side(let id, _, _, _): return id
         }
     }
 }
@@ -92,6 +94,8 @@ struct Feature: Codable, Identifiable, Hashable {
     /// 端のエッジを面取り(C)にするか(フィレット・面取り特徴から計算時に入る値)
     var startIsChamfer: Bool?
     var endIsChamfer: Bool?
+    /// 1辺だけのフィレット・面取り(計算時に入る値)
+    var sideTreatments: [SideTreatment]?
 
     // フィレット・面取り(面取りでは filletRadius が距離 C)
     var filletRadius: Double = 3
@@ -130,6 +134,16 @@ struct Feature: Codable, Identifiable, Hashable {
             return "C\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"
         }
     }
+}
+
+/// 端のふちの1辺にかけるフィレット・面取り
+struct SideTreatment: Codable, Hashable {
+    var shapeID: UUID
+    var side: Int
+    /// 先端側なら true、スケッチ面側なら false
+    var atEnd: Bool
+    var size: Double
+    var chamfer: Bool
 }
 
 /// 保存されるモデル全体

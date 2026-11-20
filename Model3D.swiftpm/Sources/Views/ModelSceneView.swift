@@ -347,7 +347,19 @@ struct ModelSceneView: UIViewRepresentable {
                     let (d, t) = Coordinator.distanceToSegment(p, pa, pb)
                     if d < (best?.0 ?? .infinity) { best = (d, a.lerp(b, Double(t))) }
                 }
-                if let b = best, b.0 < 22 { found.append((c.ref, b.0, b.1)) }
+                guard let b = best, b.0 < 22 else { continue }
+                var score = b.0
+                if c.isCornerEdge, let first = pts.first, let last = pts.last {
+                    // 角の縦のエッジは、端(上下の面の角)の近くでは選ばれにくくする。
+                    // 角には上下のふちも通っているので、角をタップしたらふちを選ぶ
+                    let ends = [first, last].map { v -> CGPoint in
+                        let s = view.projectPoint(SCNVector3(Float(v.x), Float(v.y), Float(v.z)))
+                        return CGPoint(x: CGFloat(s.x), y: CGFloat(s.y))
+                    }
+                    let nearEnd = ends.map { hypot($0.x - p.x, $0.y - p.y) }.min() ?? .infinity
+                    if nearEnd < 34 { score += 30 }
+                }
+                found.append((c.ref, score, b.1))
             }
             found.sort { $0.1 < $1.1 }
             for f in found {

@@ -150,7 +150,7 @@ struct FilletPropertyManager: View {
                 } header: {
                     Text(isChamfer ? "面取りするアイテム" : "フィレットするアイテム")
                 } footer: {
-                    Text("押し出しのふち(スケッチ面側・先端側)、カットの入口と底、角の縦のエッジを選べます。ふちを選ぶと、そのフィーチャーの同じ側のふちがすべて\(isChamfer ? "面取り" : "丸く")になります。")
+                    Text("押し出しの上下のふちの辺、カットの入口と底の辺、角の縦のエッジを選べます。タップした辺だけに\(isChamfer ? "面取り" : "フィレット")がつきます(円は1周で1辺)。")
                 }
                 Section("名前") {
                     TextField("名前", text: editor.draft(\.name, ""))

@@ -216,36 +216,56 @@ enum ProfileGeometry {
     static let circleSegments = 48
     static let arcSegments = 6
 
-    /// 反時計回りに並べた角と、その角のR・C
-    static func ccwCorners(_ shape: SketchShape) -> (pts: [Vec2], radii: [Double], chamfers: [Double]) {
+    /// 反時計回りに並べた角と、その角のR・C。sideOf[j] は反時計回りの辺 j が図形の何番目の辺か
+    /// (図形の辺 k は corners[k] → corners[k+1])
+    static func ccwCorners(_ shape: SketchShape) -> (pts: [Vec2], radii: [Double], chamfers: [Double], sideOf: [Int]) {
         var pts = shape.corners
         var radii = (0..<pts.count).map { shape.radius(at: $0) }
         var chamfers = (0..<pts.count).map { shape.chamfer(at: $0) }
+        let n = pts.count
+        var sideOf = Array(0..<n)
         if Polygon2D.signedArea(pts) < 0 {
             pts.reverse()
             radii.reverse()
             chamfers.reverse()
+            sideOf = (0..<n).map { j in ((n - 2 - j) % n + n) % n }
         }
-        return (pts, radii, chamfers)
+        return (pts, radii, chamfers, sideOf)
+    }
+
+    /// 図形の辺の数(円は1つの辺として扱う)
+    static func sideCount(_ shape: SketchShape) -> Int {
+        switch shape.kind {
+        case .circle: return 1
+        case .centerline: return 0
+        case .rectangle, .polygon: return shape.corners.count
+        }
     }
 
     /// 図形の輪郭(反時計回り)。inset > 0 なら内側へ、< 0 なら外側へずらした輪郭。
-    /// 同じ図形なら inset の値にかかわらず点の数が同じになる(押し出しの側面をつなぐため)。
     static func outline(_ shape: SketchShape, inset: Double = 0) -> [Vec2] {
+        outline(shape, sideInsets: Array(repeating: inset, count: max(sideCount(shape), 1)))
+    }
+
+    /// 辺ごとに違う量だけずらした輪郭(sideInsets は図形の辺の番号順)。
+    /// 同じ図形なら、ずらす量にかかわらず点の数が同じになる(押し出しの側面をつなぐため)。
+    static func outline(_ shape: SketchShape, sideInsets: [Double]) -> [Vec2] {
+        func inset(_ k: Int) -> Double { k < sideInsets.count ? sideInsets[k] : 0 }
         switch shape.kind {
         case .centerline:
             return shape.points
         case .circle:
             let c = shape.points[0]
-            let r = max(shape.radius - inset, 1e-4)
+            let r = max(shape.radius - inset(0), 1e-4)
             return (0..<circleSegments).map { i in
                 let a = Double(i) / Double(circleSegments) * 2 * Double.pi
                 return c + Vec2(cos(a), sin(a)) * r
             }
         case .rectangle, .polygon:
-            let (base, radii, chamfers) = ccwCorners(shape)
-            let pts = Polygon2D.offset(base, by: inset)
-            let n = pts.count
+            let (base, radii, chamfers, sideOf) = ccwCorners(shape)
+            let n = base.count
+            let o = (0..<n).map { inset(sideOf[$0]) }
+            let pts = offsetPolygon(base, o)
             var out: [Vec2] = []
             out.reserveCapacity(n * (arcSegments + 1))
             for i in 0..<n {
@@ -254,13 +274,15 @@ enum ProfileGeometry {
                 let iPrev = (i + n - 1) % n, iNext = (i + 1) % n
                 let shareA = radii[iPrev] > 0 || chamfers[iPrev] > 0 ? 0.5 : 1.0
                 let shareB = radii[iNext] > 0 || chamfers[iNext] > 0 ? 0.5 : 1.0
+                // この角をはさむ2辺のずらし量の平均
+                let d = (o[iPrev] + o[i]) / 2
                 if chamfers[i] > 0 && radii[i] <= 0 {
                     // 面取り: ずらした分だけ、角からの長さを直す
                     let d1 = (prev - p).normalized, d2 = (next - p).normalized
                     let half = acos(max(-1, min(1, d1.dot(d2)))) / 2
                     var t = chamfers[i]
-                    if abs(inset) > 1e-12, sin(half) > 1e-6, cos(half) > 1e-6 {
-                        let shift = (inset - inset / sin(half)) / cos(half)
+                    if abs(d) > 1e-12, sin(half) > 1e-6, cos(half) > 1e-6 {
+                        let shift = (d - d / sin(half)) / cos(half)
                         t = convex ? t + shift : t - shift
                     }
                     out.append(contentsOf: chamferCorner(prev: prev, p: p, next: next, setback: max(t, 0),
@@ -270,12 +292,36 @@ enum ProfileGeometry {
                 var r = radii[i]
                 if r > 0 || !convex {
                     // 内側へずらすと、凸の角のRは小さく、凹の角のRは大きくなる
-                    r = convex ? max(r - inset, 0) : max(r + inset, 0)
+                    r = convex ? max(r - d, 0) : max(r + d, 0)
                 }
                 out.append(contentsOf: corner(prev: prev, p: p, next: next, radius: r,
                                               shareA: shareA, shareB: shareB))
             }
             return out
+        }
+    }
+
+    /// 反時計回りの多角形の各辺を、辺ごとの量だけ内側へずらした多角形(角は2辺の交点)。
+    /// o[j] は辺 j(点 j → 点 j+1)のずらし量
+    static func offsetPolygon(_ pts: [Vec2], _ o: [Double]) -> [Vec2] {
+        let n = pts.count
+        guard n >= 3 else { return pts }
+        if o.allSatisfy({ abs($0) < 1e-12 }) { return pts }
+        return (0..<n).map { j in
+            let ia = (j + n - 1) % n
+            let na = (pts[j] - pts[ia]).normalized.perp
+            let nb = (pts[(j + 1) % n] - pts[j]).normalized.perp
+            let ca = na.dot(pts[j]) + o[ia]
+            let cb = nb.dot(pts[j]) + o[j]
+            let det = na.x * nb.y - na.y * nb.x
+            if abs(det) < 0.2 {
+                // ほぼ一直線(または鋭すぎる角): 二等分線の向きへずらす
+                var m = (na + nb).normalized
+                if m.length < 0.5 { m = na }
+                let c = max(0.25, m.dot(na))
+                return pts[j] + m * (((o[ia] + o[j]) / 2) / c)
+            }
+            return Vec2((ca * nb.y - na.y * cb) / det, (na.x * cb - ca * nb.x) / det)
         }
     }
 
@@ -325,6 +371,20 @@ enum ProfileGeometry {
         }
     }
 
+    /// 辺ごとにずらしても形がつぶれないか
+    static func insetIsValid(_ shape: SketchShape, sideInsets: [Double]) -> Bool {
+        switch shape.kind {
+        case .circle:
+            return shape.radius - (sideInsets.first ?? 0) > 1e-3
+        case .centerline:
+            return true
+        case .rectangle, .polygon:
+            let (base, _, _, sideOf) = ccwCorners(shape)
+            let o = (0..<base.count).map { sideOf[$0] < sideInsets.count ? sideInsets[sideOf[$0]] : 0 }
+            return Polygon2D.offsetIsValid(base, offsetPolygon(base, o))
+        }
+    }
+
     /// 内側へ inset ずらしても形がつぶれないか
     static func insetIsValid(_ shape: SketchShape, inset: Double) -> Bool {
         switch shape.kind {
@@ -333,8 +393,7 @@ enum ProfileGeometry {
         case .centerline:
             return true
         case .rectangle, .polygon:
-            let base = ccwCorners(shape).pts
-            return Polygon2D.offsetIsValid(base, Polygon2D.offset(base, by: inset))
+            return insetIsValid(shape, sideInsets: Array(repeating: inset, count: sideCount(shape)))
         }
     }
 }

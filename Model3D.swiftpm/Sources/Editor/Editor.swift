@@ -51,6 +51,12 @@ struct EdgeCandidate: Equatable {
     var ref: EdgeRef
     var points: [Vec3]
     var closed: Bool
+
+    /// 角から伸びる縦のエッジか
+    var isCornerEdge: Bool {
+        if case .corner = ref { return true }
+        return false
+    }
 }
 
 /// 画面の操作の流れ(どのコマンドの途中か)をまとめる
@@ -446,16 +452,27 @@ final class Editor: ObservableObject {
             let hStart = atBottom ? h0 : h1
             let hEnd = atBottom ? h1 : h0
             for shape in shapes {
-                let outline = Polygon2D.dedupe(ProfileGeometry.outline(shape))
-                func loop(_ h: Double) -> [Vec3] { outline.map { plane.point($0, height: h) } }
-                if isMid {
-                    out.append(EdgeCandidate(ref: .end(f.id), points: loop(h0), closed: true))
-                    out.append(EdgeCandidate(ref: .end(f.id), points: loop(h1), closed: true))
-                } else {
-                    out.append(EdgeCandidate(ref: .start(f.id), points: loop(hStart), closed: true))
-                    if !through {
-                        out.append(EdgeCandidate(ref: .end(f.id), points: loop(hEnd), closed: true))
+                // 端のふちは辺ごとに選ぶ(円は1周で1辺)
+                func addSides(_ h: Double, atEnd: Bool) {
+                    if shape.kind == .circle {
+                        let loop = Polygon2D.dedupe(ProfileGeometry.outline(shape)).map { plane.point($0, height: h) }
+                        out.append(EdgeCandidate(ref: .side(f.id, shape.id, 0, atEnd), points: loop, closed: true))
+                        return
                     }
+                    let c = shape.corners
+                    for k in c.indices {
+                        out.append(EdgeCandidate(ref: .side(f.id, shape.id, k, atEnd),
+                                                 points: [plane.point(c[k], height: h),
+                                                          plane.point(c[(k + 1) % c.count], height: h)],
+                                                 closed: false))
+                    }
+                }
+                if isMid {
+                    addSides(h0, atEnd: true)
+                    addSides(h1, atEnd: true)
+                } else {
+                    addSides(hStart, atEnd: false)
+                    if !through { addSides(hEnd, atEnd: true) }
                 }
                 for (i, c) in shape.corners.enumerated() {
                     out.append(EdgeCandidate(ref: .corner(f.id, shape.id, i),
@@ -475,7 +492,16 @@ final class Editor: ObservableObject {
             let merged = store.feature(e.featureID)?.mergeResult ?? true
             return "\(name): " + (kind == .cut ? "入口のふち" : (merged ? "付け根(スケッチ面側)" : "スケッチ面側のふち"))
         case .end: return "\(name): " + (kind == .cut ? "底のすみ" : "先端側のふち")
-        case .corner(_, _, let k): return "\(name): 角\(k + 1)のエッジ"
+        case .corner(_, _, let k): return "\(name): 角\(k + 1)の縦のエッジ"
+        case .side(_, _, let k, let atEnd):
+            let whereText: String
+            if kind == .cut {
+                whereText = atEnd ? "底" : "入口"
+            } else {
+                let merged = store.feature(e.featureID)?.mergeResult ?? true
+                whereText = atEnd ? "先端側" : (merged ? "付け根" : "スケッチ面側")
+            }
+            return "\(name): \(whereText)の辺\(k + 1)"
         }
     }
 
