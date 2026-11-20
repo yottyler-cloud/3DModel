@@ -13,6 +13,9 @@ struct SketchDrawing {
     var highlightCorner: Vec2?
     /// スケッチに残した寸法
     var dimensions: [SketchDimension] = []
+    /// 位置の寸法で選んだ点
+    var pendingPoint: Vec2?
+    var pendingPoint2: Vec2?
 
     func draw(_ ctx: inout GraphicsContext, size: CGSize, vp: SketchViewport) {
         drawGrid(&ctx, size: size, vp: vp)
@@ -40,12 +43,20 @@ struct SketchDrawing {
             let selected = s.id == selection
             ctx.stroke(path(s, vp), with: .color(selected ? .orange : .blue),
                        lineWidth: selected ? 2.5 : 1.6)
-            drawLabels(&ctx, s, vp: vp, showSize: !dimensions.contains { $0.shapeID == s.id })
+            drawLabels(&ctx, s, vp: vp, showSize: !dimensions.contains { $0.shapeID == s.id && $0.kind.points == nil })
         }
         // 寸法
         for d in dimensions {
-            guard let shape = shapes.first(where: { $0.id == d.shapeID }) else { continue }
-            DimensionMath.draw(&ctx, d, shape, vp, selected: d.shapeID == selection)
+            DimensionMath.draw(&ctx, d, shapes, vp, selected: d.shapeID == selection)
+        }
+        // 位置の寸法の1つ目の点
+        if let p = pendingPoint {
+            let sp = vp.toScreen(p)
+            ctx.fill(Path(ellipseIn: CGRect(x: sp.x - 6, y: sp.y - 6, width: 12, height: 12)), with: .color(.orange))
+        }
+        if let q = pendingPoint2 {
+            let sp = vp.toScreen(q)
+            ctx.fill(Path(ellipseIn: CGRect(x: sp.x - 6, y: sp.y - 6, width: 12, height: 12)), with: .color(.orange))
         }
 
         if let p = previewShape, p.isValid {

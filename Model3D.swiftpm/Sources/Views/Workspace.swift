@@ -172,7 +172,9 @@ struct SketchOverlay: View {
         return SketchDrawing(shapes: s.shapes, references: env.references, selection: s.selection,
                              axisLabels: ("", ""), previewShape: preview,
                              polyPoints: s.polyPoints, cursor: s.cursor ?? s.dragCurrent,
-                             highlightCorner: nil, dimensions: s.dimensions)
+                             highlightCorner: nil, dimensions: s.dimensions,
+                             pendingPoint: (s.pointPair?.a ?? s.pointPick).flatMap { DimensionMath.point($0, s.shapes) },
+                             pendingPoint2: s.pointPair.flatMap { DimensionMath.point($0.b, s.shapes) })
     }
 }
 

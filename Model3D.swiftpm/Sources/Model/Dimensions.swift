@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// 寸法をとる点
+enum PointRef: Codable, Hashable {
+    /// 原点
+    case origin
+    /// 図形の角・頂点(長方形は左下から反時計回り、多角形は頂点順、中心線は始点0・終点1)
+    case vertex(UUID, Int)
+    /// 円の中心
+    case center(UUID)
+
+    var shapeID: UUID? {
+        switch self {
+        case .origin: return nil
+        case .vertex(let id, _), .center(let id): return id
+        }
+    }
+}
+
 /// スケッチの寸法の種類
 enum DimKind: Codable, Hashable {
     /// 長方形の幅・高さ
@@ -10,6 +27,10 @@ enum DimKind: Codable, Hashable {
     case edge(Int)
     /// 中心線の長さ
     case length
+    /// 2点の水平の距離・垂直の距離・直線距離(1つ目は基準、2つ目の点が動く)
+    case horizontal(PointRef, PointRef)
+    case vertical(PointRef, PointRef)
+    case distance(PointRef, PointRef)
 
     var title: String {
         switch self {
@@ -17,6 +38,17 @@ enum DimKind: Codable, Hashable {
         case .height: return "高さ"
         case .diameter: return "直径"
         case .edge, .length: return "長さ"
+        case .horizontal: return "水平距離"
+        case .vertical: return "垂直距離"
+        case .distance: return "距離"
+        }
+    }
+
+    /// 位置の寸法(2点の間)か
+    var points: (PointRef, PointRef)? {
+        switch self {
+        case .horizontal(let a, let b), .vertical(let a, let b), .distance(let a, let b): return (a, b)
+        default: return nil
         }
     }
 }
@@ -30,8 +62,49 @@ struct SketchDimension: Codable, Identifiable, Hashable {
 }
 
 enum DimensionMath {
+    /// 点の位置
+    static func point(_ r: PointRef, _ shapes: [SketchShape]) -> Vec2? {
+        switch r {
+        case .origin:
+            return .zero
+        case .center(let id):
+            guard let s = shapes.first(where: { $0.id == id }), !s.points.isEmpty else { return nil }
+            return s.points[0]
+        case .vertex(let id, let k):
+            guard let s = shapes.first(where: { $0.id == id }) else { return nil }
+            switch s.kind {
+            case .rectangle: let c = s.corners; return k < c.count ? c[k] : nil
+            case .polygon, .centerline: return k < s.points.count ? s.points[k] : nil
+            case .circle: return s.points[0]
+            }
+        }
+    }
+
+    /// 寸法をとれる点(原点・角・頂点・中心)
+    static func pickablePoints(_ shapes: [SketchShape]) -> [(PointRef, Vec2)] {
+        var out: [(PointRef, Vec2)] = [(.origin, .zero)]
+        for s in shapes where s.isValid {
+            switch s.kind {
+            case .circle: out.append((.center(s.id), s.points[0]))
+            case .rectangle: for (k, c) in s.corners.enumerated() { out.append((.vertex(s.id, k), c)) }
+            case .polygon, .centerline: for (k, p) in s.points.enumerated() { out.append((.vertex(s.id, k), p)) }
+            }
+        }
+        return out
+    }
+
     /// いまの図形から測った値
-    static func measure(_ kind: DimKind, _ shape: SketchShape) -> Double? {
+    static func measure(_ kind: DimKind, shapeID: UUID, _ shapes: [SketchShape]) -> Double? {
+        if let pair = kind.points {
+            let (a, b) = pair
+            guard let p = point(a, shapes), let q = point(b, shapes) else { return nil }
+            switch kind {
+            case .horizontal: return abs(q.x - p.x)
+            case .vertical: return abs(q.y - p.y)
+            default: return p.distance(to: q)
+            }
+        }
+        guard let shape = shapes.first(where: { $0.id == shapeID }) else { return nil }
         switch (kind, shape.kind) {
         case (.width, .rectangle): return shape.rectSize.x
         case (.height, .rectangle): return shape.rectSize.y
@@ -44,7 +117,66 @@ enum DimensionMath {
         }
     }
 
-    /// 寸法の値に合わせて図形を変える。
+    /// 寸法の値に合わせて図形を変える
+    static func apply(_ kind: DimKind, value v: Double, shapeID: UUID, shapes: inout [SketchShape],
+                      dimensioned: Set<Int>) {
+        if let pair = kind.points {
+            let (a, b) = pair
+            guard v >= 0, let p = point(a, shapes), let q = point(b, shapes),
+                  let movingID = b.shapeID, let i = shapes.firstIndex(where: { $0.id == movingID }) else { return }
+            var target = q
+            switch kind {
+            case .horizontal: target.x = p.x + (q.x - p.x < 0 ? -v : v)
+            case .vertical: target.y = p.y + (q.y - p.y < 0 ? -v : v)
+            default:
+                let d = q - p
+                target = p + (d.length > 1e-9 ? d.normalized : Vec2(1, 0)) * v
+            }
+            if a.shapeID == movingID {
+                // 同じ図形の2点: その点だけを動かす
+                moveVertex(&shapes[i], b, to: target)
+            } else {
+                // 別の図形(または原点)が基準: 図形ごと動かす
+                shapes[i].translate(by: target - q)
+            }
+            return
+        }
+        guard let i = shapes.firstIndex(where: { $0.id == shapeID }) else { return }
+        apply(kind, value: v, to: &shapes[i], dimensioned: dimensioned)
+    }
+
+    /// 図形の1点を動かす
+    static func moveVertex(_ shape: inout SketchShape, _ r: PointRef, to p: Vec2) {
+        switch r {
+        case .origin: return
+        case .center: shape.points[0] = p
+        case .vertex(_, let k):
+            switch shape.kind {
+            case .polygon, .centerline:
+                if k < shape.points.count { shape.points[k] = p }
+            case .circle:
+                shape.points[0] = p
+            case .rectangle:
+                // 角 k: 0 左下, 1 右下, 2 右上, 3 左上
+                var lo = shape.rectMin, hi = shape.rectMin + shape.rectSize
+                if k == 0 || k == 3 { lo.x = p.x } else { hi.x = p.x }
+                if k == 0 || k == 1 { lo.y = p.y } else { hi.y = p.y }
+                shape.points = [lo, hi]
+            }
+        }
+    }
+
+    /// 別の図形(または原点)からの位置の寸法を、もう一度満たすように図形を動かす
+    static func enforcePositions(_ dims: [SketchDimension], shapes: inout [SketchShape], skip: UUID?) {
+        for _ in 0..<3 {
+            for d in dims where d.id != skip {
+                guard let pair = d.kind.points, let mid = pair.1.shapeID, pair.0.shapeID != mid else { continue }
+                apply(d.kind, value: d.value, shapeID: mid, shapes: &shapes, dimensioned: [])
+            }
+        }
+    }
+
+    /// 図形1つの寸法(幅・高さ・直径・辺の長さ)。
     /// 多角形の辺は終点を動かし、その先の寸法付きの辺も長さと向きを保ったまま一緒に動かす
     /// (寸法のない辺が伸び縮みして合わせる)
     static func apply(_ kind: DimKind, value v: Double, to shape: inout SketchShape, dimensioned: Set<Int>) {
@@ -75,6 +207,8 @@ enum DimensionMath {
                 shape.points[next] = shape.points[next] + delta
                 e = next
             }
+        case .horizontal, .vertical, .distance:
+            break
         }
     }
 
@@ -88,7 +222,34 @@ enum DimensionMath {
         var isDiameter: Bool
     }
 
-    static func placement(_ dim: SketchDimension, _ shape: SketchShape, _ vp: SketchViewport) -> Placement? {
+    static func placement(_ dim: SketchDimension, _ shapes: [SketchShape], _ vp: SketchViewport) -> Placement? {
+        if let pair = dim.kind.points {
+            guard let p = point(pair.0, shapes), let q = point(pair.1, shapes) else { return nil }
+            let a = vp.toScreen(p), b = vp.toScreen(q)
+            let gap: CGFloat = 26
+            switch dim.kind {
+            case .horizontal:
+                let y = min(a.y, b.y) - gap
+                let da = CGPoint(x: a.x, y: y), db = CGPoint(x: b.x, y: y)
+                return Placement(a: a, b: b, da: da, db: db,
+                                 label: CGPoint(x: (da.x + db.x) / 2, y: y - 2), isDiameter: false)
+            case .vertical:
+                let x = max(a.x, b.x) + gap
+                let da = CGPoint(x: x, y: a.y), db = CGPoint(x: x, y: b.y)
+                return Placement(a: a, b: b, da: da, db: db,
+                                 label: CGPoint(x: x + 2, y: (da.y + db.y) / 2), isDiameter: false)
+            default:
+                var ox = -(b.y - a.y), oy = b.x - a.x
+                let l = max(hypot(ox, oy), 1e-6)
+                ox /= l
+                oy /= l
+                let da = CGPoint(x: a.x + ox * gap, y: a.y + oy * gap)
+                let db = CGPoint(x: b.x + ox * gap, y: b.y + oy * gap)
+                return Placement(a: a, b: b, da: da, db: db,
+                                 label: CGPoint(x: (da.x + db.x) / 2, y: (da.y + db.y) / 2), isDiameter: false)
+            }
+        }
+        guard let shape = shapes.first(where: { $0.id == dim.shapeID }) else { return nil }
         var p0: Vec2, p1: Vec2, outward: Vec2
         switch (dim.kind, shape.kind) {
         case (.width, .rectangle):
@@ -132,9 +293,9 @@ enum DimensionMath {
     }
 
     /// 寸法を描く
-    static func draw(_ ctx: inout GraphicsContext, _ dim: SketchDimension, _ shape: SketchShape,
+    static func draw(_ ctx: inout GraphicsContext, _ dim: SketchDimension, _ shapes: [SketchShape],
                      _ vp: SketchViewport, selected: Bool) {
-        guard let p = placement(dim, shape, vp) else { return }
+        guard let p = placement(dim, shapes, vp) else { return }
         let color: Color = selected ? .orange : Color(red: 0.1, green: 0.35, blue: 0.85)
         var lines = Path()
         if !p.isDiameter {

@@ -42,12 +42,18 @@ enum SketchTool: String, CaseIterable, Identifiable {
         case .centerline: return "回転の軸: 始点から終点へドラッグ"
         case .sketchFillet: return "角をタップして丸める(もう一度で外す)"
         case .sketchChamfer: return "角をタップして面取り(もう一度で外す)"
-        case .dimension: return "辺や円をタップして寸法を入力"
+        case .dimension: return "辺や円をタップで長さ・直径。点を2つタップで位置の寸法"
         }
     }
 }
 
 /// スマート寸法の入力
+/// 位置の寸法で選んだ2点(a が基準、b が動く)
+struct PointPair {
+    var a: PointRef
+    var b: PointRef
+}
+
 struct DimensionEdit: Identifiable {
     var id = UUID()
     var shapeID: UUID
@@ -100,7 +106,15 @@ struct SketchSession {
     /// スケッチ終了のあとに続けて行う押し出し・カット
     var continueWith: FeatureKind?
 
-    var tool: SketchTool = .line
+    var tool: SketchTool = .line {
+        didSet {
+            pointPick = nil
+            pointPair = nil
+        }
+    }
+    /// 位置の寸法: 1つ目に選んだ点 / 選んだ2点
+    var pointPick: PointRef?
+    var pointPair: PointPair?
     var scale: CGFloat = 5
     var pan: CGSize = .zero
     var selection: UUID?
@@ -131,8 +145,7 @@ struct SketchSession {
         let shapes = feature.sketch.shapes
         var dims: [SketchDimension] = []
         for var d in feature.sketch.dims {
-            guard let shape = shapes.first(where: { $0.id == d.shapeID }),
-                  let v = DimensionMath.measure(d.kind, shape) else { continue }
+            guard let v = DimensionMath.measure(d.kind, shapeID: d.shapeID, shapes) else { continue }
             d.value = v
             dims.append(d)
         }
@@ -149,8 +162,7 @@ struct SketchSession {
         let vp = viewport(env.size)
         var best: (SketchDimension, CGFloat)?
         for d in dimensions {
-            guard let shape = shapes.first(where: { $0.id == d.shapeID }),
-                  let p = DimensionMath.placement(d, shape, vp) else { continue }
+            guard let p = DimensionMath.placement(d, shapes, vp) else { continue }
             let dist = hypot(p.label.x - s.x, p.label.y - s.y)
             if dist < 28 && dist < (best?.1 ?? .infinity) { best = (d, dist) }
         }
@@ -360,6 +372,28 @@ struct SketchSession {
         }
         let vp = viewport(env.size)
         let w = vp.toWorld(s)
+        // 点(原点・角・頂点・円の中心)をタップしたら、位置の寸法
+        var nearest: (PointRef, CGFloat)?
+        for (ref, p) in DimensionMath.pickablePoints(shapes) {
+            let sp = vp.toScreen(p)
+            let dist = hypot(sp.x - s.x, sp.y - s.y)
+            if dist < 16 && dist < (nearest?.1 ?? .infinity) { nearest = (ref, dist) }
+        }
+        if let hit = nearest {
+            let ref = hit.0
+            if let first = pointPick, first != ref {
+                // 原点は動かせないので、動くほう(2つ目)にしない
+                pointPair = ref == .origin ? PointPair(a: ref, b: first) : PointPair(a: first, b: ref)
+                pointPick = nil
+                if let id = pointPair?.b.shapeID { selection = id }
+            } else {
+                pointPick = ref
+                pointPair = nil
+            }
+            return
+        }
+        pointPick = nil
+        pointPair = nil
         let tol = Double(16 / scale)
         var best: (UUID, DimKind, Double)?
         func consider(_ id: UUID, _ kind: DimKind, _ dist: Double) {
@@ -384,8 +418,7 @@ struct SketchSession {
                 }
             }
         }
-        guard let b = best, let shape = shapes.first(where: { $0.id == b.0 }),
-              let v = DimensionMath.measure(b.1, shape) else { return }
+        guard let b = best, let v = DimensionMath.measure(b.1, shapeID: b.0, shapes) else { return }
         selection = b.0
         dimension = DimensionEdit(shapeID: b.0, kind: b.1, title: b.1.title, text: Format.mm((v * 1000).rounded() / 1000))
     }
@@ -394,9 +427,11 @@ struct SketchSession {
     mutating func applyDimension() {
         guard let d = dimension else { return }
         dimension = nil
+        pointPick = nil
+        pointPair = nil
         let text = d.text.replacingOccurrences(of: ",", with: ".")
             .trimmingCharacters(in: .whitespaces)
-        guard let v = Double(text), v > 0,
+        guard let v = Double(text), v >= 0, v > 0 || d.kind.points != nil,
               let i = shapes.firstIndex(where: { $0.id == d.shapeID }) else { return }
         pushUndo()
         var dims = feature.sketch.dims
@@ -411,9 +446,23 @@ struct SketchSession {
         for x in dims where x.shapeID == d.shapeID {
             if case .edge(let k) = x.kind { dimensioned.insert(k) }
         }
-        var shape = shapes[i]
-        DimensionMath.apply(d.kind, value: v, to: &shape, dimensioned: dimensioned)
-        shapes[i] = shape
+        _ = i
+        var all = shapes
+        DimensionMath.apply(d.kind, value: v, shapeID: d.shapeID, shapes: &all, dimensioned: dimensioned)
+        // ほかの図形からの位置の寸法は保つ(図形ごと動かして合わせる)
+        let editedID = dims.first { $0.shapeID == d.shapeID && $0.kind == d.kind }?.id
+        DimensionMath.enforcePositions(dims, shapes: &all, skip: editedID)
+        shapes = all
+    }
+
+    /// 選んだ2点に位置の寸法を付ける(水平・垂直・直線距離)
+    mutating func choosePositionDimension(_ kind: DimKind) {
+        guard let pair = kind.points, let movingID = pair.1.shapeID,
+              let v = DimensionMath.measure(kind, shapeID: movingID, shapes) else { return }
+        pointPair = nil
+        pointPick = nil
+        dimension = DimensionEdit(shapeID: movingID, kind: kind, title: kind.title,
+                                  text: Format.mm((v * 1000).rounded() / 1000))
     }
 
     // MARK: スナップ・選択

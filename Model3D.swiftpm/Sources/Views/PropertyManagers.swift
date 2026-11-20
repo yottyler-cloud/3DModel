@@ -215,6 +215,41 @@ struct SketchPropertyManager: View {
                     }
                 }
 
+                if s?.tool == .dimension {
+                    Section {
+                        if let pair = s?.pointPair, let shapes = s?.shapes {
+                            ForEach([DimKind.horizontal(pair.a, pair.b), .vertical(pair.a, pair.b),
+                                     .distance(pair.a, pair.b)], id: \.self) { kind in
+                                Button {
+                                    editor.sketch?.choosePositionDimension(kind)
+                                } label: {
+                                    HStack {
+                                        Text(kind.title)
+                                        Spacer()
+                                        Text(Format.mm(((DimensionMath.measure(kind, shapeID: pair.b.shapeID ?? UUID(), shapes) ?? 0) * 1000).rounded() / 1000) + " mm")
+                                            .font(.body.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            Button("点の選び直し", role: .cancel) {
+                                editor.sketch?.pointPair = nil
+                                editor.sketch?.pointPick = nil
+                            }
+                        } else if s?.pointPick != nil {
+                            Text("2つ目の点(原点・角・頂点・円の中心)をタップしてください")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("1つ目の点をタップすると、位置の寸法を付けられます。辺や円をタップすると長さ・直径です。")
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("位置の寸法")
+                    } footer: {
+                        Text("1つ目の点が基準、2つ目の点(の図形)が動きます。原点は動きません。")
+                    }
+                }
+
                 Section {
                     if (s?.dimensions ?? []).isEmpty {
                         Text("寸法はまだありません").foregroundStyle(.secondary)
@@ -276,7 +311,23 @@ struct SketchPropertyManager: View {
         let n = (shapes.firstIndex { $0.id == d.shapeID } ?? 0) + 1
         let base = "\(shape?.kind.label ?? "図形")\(n)"
         if case .edge(let k) = d.kind { return "\(base) 辺\(k + 1)" }
+        if let pair = d.kind.points {
+            return "\(pointName(pair.0, shapes))→\(pointName(pair.1, shapes)) \(d.kind.title)"
+        }
         return "\(base) \(d.kind.title)"
+    }
+
+    private func pointName(_ r: PointRef, _ shapes: [SketchShape]) -> String {
+        switch r {
+        case .origin: return "原点"
+        case .center(let id):
+            let n = (shapes.firstIndex { $0.id == id } ?? 0) + 1
+            return "円\(n)の中心"
+        case .vertex(let id, let k):
+            let n = (shapes.firstIndex { $0.id == id } ?? 0) + 1
+            let label = shapes.first { $0.id == id }?.kind.label ?? "図形"
+            return "\(label)\(n)の点\(k + 1)"
+        }
     }
 
     private func summary(_ s: SketchShape) -> String {
