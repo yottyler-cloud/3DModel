@@ -10,7 +10,7 @@ let package = Package(
             name: "Model3D",
             targets: ["AppModule"],
             bundleIdentifier: "jp.taireru.model3d",
-            displayVersion: "0.1.0",
+            displayVersion: "1",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .pencil),
             accentColor: .presetColor(.blue),

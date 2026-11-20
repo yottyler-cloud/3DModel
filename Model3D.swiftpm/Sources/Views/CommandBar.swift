@@ -32,6 +32,10 @@ struct CommandBar: View {
                     .buttonStyle(.plain)
                 }
                 Spacer()
+                Text(AppVersion.label)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 8)
             }
             .padding(.horizontal, 8)
             .padding(.bottom, 4)

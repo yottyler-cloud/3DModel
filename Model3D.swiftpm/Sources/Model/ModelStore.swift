@@ -198,7 +198,8 @@ final class ModelStore: ObservableObject {
 
     private var fileURL: URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent("part.json")
+        // Ver.01 で保存先を変えた(それ以前の見本モデル入りのデータは読み込まない)
+        return dir.appendingPathComponent("model3d_part.json")
     }
 
     private func save() {
