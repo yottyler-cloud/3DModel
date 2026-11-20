@@ -526,7 +526,9 @@ final class Editor: ObservableObject {
         }
         if store.mesh.isPlanar(hit.triangle) {
             let n = store.mesh.faceNormals[hit.triangle]
-            let plane = SketchPlane.from(normal: n, through: hit.point, name: "面")
+            // タップ位置(画面の精度)ではなく、形の面そのものの位置を使う(ごくわずかなすき間を作らない)
+            let w = store.mesh.facePlaneW[hit.triangle]
+            let plane = SketchPlane.from(normal: n, through: n * w, name: "面")
             selection = .face(plane, triangles: store.mesh.coplanarTriangles(with: hit.triangle))
         } else {
             selection = nil

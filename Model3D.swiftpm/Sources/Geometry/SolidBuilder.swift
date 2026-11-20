@@ -24,8 +24,8 @@ enum SolidBuilder {
                     messages.append("「\(f.name)」: シェルにする形がまだありません")
                     continue
                 }
-                let inner = shellInner(done, thickness: max(f.filletRadius, 0.01), open: f.filletEdges, messages: &messages)
-                bodies = bodies.map { $0.subtract(inner) }.filter { !$0.isEmpty }
+                let pieces = shellInner(done, thickness: max(f.filletRadius, 0.01), open: f.filletEdges, messages: &messages)
+                bodies = shell(bodies, pieces: pieces, thickness: f.filletRadius, name: f.name, messages: &messages)
                 continue
             }
             done.append((f, startContact(f, bodies: bodies)))
@@ -370,9 +370,49 @@ enum SolidBuilder {
 
     /// シェルでくり抜く形: これまでのフィーチャーを厚みの分だけ内側に縮めて作り直したもの
     /// (押し出し・回転は縮め、カットは広げる)。開口に選んだ面は外まで抜く
+    /// くり抜く形でボディをくり抜く。結果の外形が元と変わってしまったら(計算の失敗)、
+    /// 1つずつくり抜く方法でやり直し、それでもだめなら元の形のままにする
+    static func shell(_ bodies: [Solid], pieces: [(Solid, Bool)], thickness t: Double, name: String,
+                      messages: inout [String]) -> [Solid] {
+        func union(_ ps: [(Solid, Bool)]) -> Solid {
+            var s = Solid.empty
+            for (p, add) in ps { s = add ? s.union(p) : s.subtract(p) }
+            return s
+        }
+        func plausible(_ before: Solid, _ after: Solid) -> Bool {
+            guard !after.isEmpty else { return false }
+            let a = before.bounds, b = after.bounds
+            let tol = max(t * 0.5, 0.05)
+            let sizeOK = abs(a.size.x - b.size.x) < tol && abs(a.size.y - b.size.y) < tol && abs(a.size.z - b.size.z) < tol
+            let va = before.volume, vb = after.volume
+            return sizeOK && vb > 0 && vb < va + 1e-6
+        }
+        let inner = union(pieces)
+        var out: [Solid] = []
+        for body in bodies {
+            let r1 = body.subtract(inner)
+            if plausible(body, r1) {
+                out.append(r1)
+                continue
+            }
+            // やり直し: 足す形で1つずつくり抜き、カットのまわりの壁(元の形とカットを広げた形の重なり)を戻す
+            var r2 = body
+            for (p, add) in pieces where add { r2 = r2.subtract(p) }
+            for (p, add) in pieces where !add { r2 = r2.union(body.intersect(p)) }
+            if plausible(body, r2) {
+                out.append(r2)
+            } else {
+                messages.append("「\(name)」: シェルを計算できませんでした(厚みや開口を変えてみてください)")
+                out.append(body)
+            }
+        }
+        return out.filter { !$0.isEmpty }
+    }
+
+    /// シェルでくり抜く形(足す形と、そこから除く形の並び)
     static func shellInner(_ prev: [(Feature, Bool)], thickness t: Double, open: [EdgeRef],
-                           messages: inout [String]) -> Solid {
-        var inner = Solid.empty
+                           messages: inout [String]) -> [(Solid, Bool)] {
+        var pieces: [(Solid, Bool)] = []
         let far = t * 3 + 1
         for (f, touch) in prev {
             let shapes = f.sketch.shapes.filter { $0.isProfile }
@@ -389,7 +429,8 @@ enum SolidBuilder {
                 // 端をどれだけ外へ延ばすか(負なら縮める)
                 func grow(_ isStart: Bool) -> Double {
                     if isStart ? startOpen : endOpen { return far }
-                    if isStart && touch { return t }   // ほかの形に接する側: 中の空洞をつなげる
+                    // ほかの形に接する側: 中の空洞をつなげる(面で接するだけだと計算が不安定なので少し重ねる)
+                    if isStart && touch { return t + min(t * 0.5, 1) }
                     return -t
                 }
                 let hb = h0 - grow(bottomIsStart), ht = h1 + grow(topIsStart)
@@ -429,7 +470,7 @@ enum SolidBuilder {
                         piece = piece.subtract(Solid(polygons: prism(shape: hole, plane: plane, h0: hb - 1, h1: ht + 1,
                                                                      bottom: [], top: [], baseInset: -t)))
                     }
-                    inner = inner.union(piece)
+                    pieces.append((piece, true))
                 }
             case .cut:
                 // カットは広げる: 入口は外まで、底は厚みの分だけ深く
@@ -438,8 +479,8 @@ enum SolidBuilder {
                 let hb = h0 - (entryBottom || through ? far : t)
                 let ht = h1 + (entryTop || through ? far : t)
                 for (i, shape) in shapes.enumerated() where depth[i] % 2 == 0 {
-                    inner = inner.subtract(Solid(polygons: prism(shape: shape, plane: plane, h0: hb, h1: ht,
-                                                                 bottom: [], top: [], baseInset: -t)))
+                    pieces.append((Solid(polygons: prism(shape: shape, plane: plane, h0: hb, h1: ht,
+                                                         bottom: [], top: [], baseInset: -t)), false))
                 }
             case .revolve, .revolveCut:
                 guard let axis = f.revolveAxis else { continue }
@@ -455,12 +496,12 @@ enum SolidBuilder {
                         piece = piece.union(Solid(polygons: polys))
                     }
                 }
-                inner = f.kind == .revolve ? inner.union(piece) : inner.subtract(piece)
+                pieces.append((piece, f.kind == .revolve))
             default:
                 break
             }
         }
-        return inner
+        return pieces
     }
 
     /// 線分が回転軸の上にあるか

@@ -8,7 +8,7 @@ struct CSGPlane {
     var normal: Vec3
     var w: Double
 
-    static let epsilon = 1e-6
+    static let epsilon = 1e-5
 
     /// Newell 法で多角形の平面を求める(3点が一直線上でも安定)
     init?(points: [Vec3]) {
@@ -242,6 +242,34 @@ struct Solid {
         b.invert()
         a.build(b.allPolygons())
         return Solid(polygons: a.allPolygons())
+    }
+
+    /// 共通部分
+    func intersect(_ other: Solid) -> Solid {
+        if isEmpty || other.isEmpty { return .empty }
+        if !bounds.intersects(other.bounds) { return .empty }
+        let a = CSGNode(polygons)
+        let b = CSGNode(other.polygons)
+        a.invert()
+        b.clipTo(a)
+        b.invert()
+        a.clipTo(b)
+        b.clipTo(a)
+        a.build(b.allPolygons())
+        a.invert()
+        return Solid(polygons: a.allPolygons())
+    }
+
+    /// 体積(多角形の向きが外向きなら正)
+    var volume: Double {
+        var v = 0.0
+        for p in polygons where p.vertices.count >= 3 {
+            let a = p.vertices[0]
+            for k in 1..<(p.vertices.count - 1) {
+                v += a.dot(p.vertices[k].cross(p.vertices[k + 1]))
+            }
+        }
+        return v / 6
     }
 
     func subtract(_ other: Solid) -> Solid {
