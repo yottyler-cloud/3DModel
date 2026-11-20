@@ -464,7 +464,9 @@ final class Editor: ObservableObject {
         let name = store.feature(e.featureID)?.name ?? "(削除済み)"
         let kind = store.feature(e.featureID)?.kind
         switch e {
-        case .start: return "\(name): " + (kind == .cut ? "入口のふち" : "スケッチ面側のふち")
+        case .start:
+            let merged = store.feature(e.featureID)?.mergeResult ?? true
+            return "\(name): " + (kind == .cut ? "入口のふち" : (merged ? "付け根(スケッチ面側)" : "スケッチ面側のふち"))
         case .end: return "\(name): " + (kind == .cut ? "底のすみ" : "先端側のふち")
         case .corner(_, _, let k): return "\(name): 角\(k + 1)のエッジ"
         }

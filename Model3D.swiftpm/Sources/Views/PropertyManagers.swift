@@ -69,6 +69,17 @@ struct ExtrudePropertyManager: View {
                         })
                     }
                 }
+                if kind == .extrude {
+                    Section {
+                        Toggle("元の形とつなげる(結果をマージ)", isOn: editor.draft(\.mergeResult, true))
+                    } header: {
+                        Text("ボディ")
+                    } footer: {
+                        Text(draft?.mergeResult ?? true
+                             ? "触れている形と1つのボディになります。付け根のフィレットは元の面へなだらかにつながります。"
+                             : "元の形とつなげず、別のボディとして作ります。")
+                    }
+                }
                 Section("スケッチ") {
                     LabeledContent("使うスケッチ", value: draft?.sketchName ?? "")
                     LabeledContent("平面", value: draft?.sketch.plane.name ?? "")

@@ -77,6 +77,13 @@ struct Feature: Codable, Identifiable, Hashable {
 
     var suppressed = false
 
+    /// 元の形とつなげるか(nil は古い保存データ: つなげる)。false なら別のボディになる
+    var merge: Bool?
+    var mergeResult: Bool {
+        get { merge ?? true }
+        set { merge = newValue }
+    }
+
     var hasSketch: Bool { kind != .fillet }
 
     var summary: String {
@@ -87,7 +94,9 @@ struct Feature: Codable, Identifiable, Hashable {
             switch endCondition {
             case .throughAll where kind == .cut: return "全貫通"
             case .midPlane: return "中間平面 \(Format.mm(distance)) mm"
-            default: return "\(Format.mm(distance)) mm\(reversed ? " 反対" : "")"
+            default:
+                let sep = kind == .extrude && !mergeResult ? " 別ボディ" : ""
+                return "\(Format.mm(distance)) mm\(reversed ? " 反対" : "")\(sep)"
             }
         case .fillet:
             return "R\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"

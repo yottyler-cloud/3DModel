@@ -9,10 +9,12 @@ enum SolidBuilder {
     struct Result {
         var mesh: TriMesh
         var messages: [String]
+        var bodyCount: Int
     }
 
     static func build(_ features: [Feature]) -> Result {
-        var solid = Solid.empty
+        // ソリッドボディの一覧(「つなげない」押し出しは別のボディになる)
+        var bodies: [Solid] = []
         var messages: [String] = []
         for f in effective(features) {
             let shapes = f.sketch.shapes.filter { $0.isValid }
@@ -20,16 +22,53 @@ enum SolidBuilder {
                 messages.append("「\(f.name)」: スケッチに閉じた図形がありません")
                 continue
             }
-            let tool = toolSolid(for: f, shapes: shapes)
             switch f.kind {
-            case .extrude: solid = solid.union(tool)
+            case .extrude:
+                if f.mergeResult {
+                    // スケッチ面側に形が接していれば、付け根のフィレットは元の面へなだらかにつなぐ
+                    let concave = startTouchesBody(f, bodies: bodies)
+                    let tool = toolSolid(for: f, shapes: shapes, startConcave: concave)
+                    let tb = tool.bounds
+                    var merged = tool
+                    var rest: [Solid] = []
+                    for b in bodies {
+                        if b.bounds.intersects(tb, margin: 1e-4) { merged = b.union(merged) } else { rest.append(b) }
+                    }
+                    bodies = rest + [merged]
+                } else {
+                    bodies.append(toolSolid(for: f, shapes: shapes, startConcave: false))
+                }
             case .cut:
-                if solid.isEmpty { messages.append("「\(f.name)」: 削る形がまだありません") }
-                solid = solid.subtract(tool)
+                if bodies.isEmpty { messages.append("「\(f.name)」: 削る形がまだありません") }
+                let tool = toolSolid(for: f, shapes: shapes, startConcave: false)
+                bodies = bodies.map { $0.subtract(tool) }.filter { !$0.isEmpty }
             default: break
             }
         }
-        return Result(mesh: TriMesh(solid: solid), messages: messages)
+        let all = Solid(polygons: bodies.flatMap { $0.polygons })
+        return Result(mesh: TriMesh(solid: all), messages: messages, bodyCount: bodies.count)
+    }
+
+    /// 押し出しのスケッチ面側(始まりの面)に、ほかの形が接しているか
+    static func startTouchesBody(_ f: Feature, bodies: [Solid]) -> Bool {
+        guard f.startFillet > 0, f.endCondition != .midPlane, !bodies.isEmpty else { return false }
+        let (h0, h1, atBottom) = extent(of: f)
+        let plane = f.sketch.plane
+        let eps = 1e-4
+        for b in bodies {
+            var lo = Double.infinity, hi = -Double.infinity
+            for p in b.polygons { for v in p.vertices {
+                let d = plane.distance(v)
+                lo = min(lo, d)
+                hi = max(hi, d)
+            } }
+            if atBottom {
+                if lo < h0 - eps && hi >= h0 - eps { return true }
+            } else {
+                if hi > h1 + eps && lo <= h1 + eps { return true }
+            }
+        }
+        return false
     }
 
     /// フィレット特徴の指定を、対象の押し出し・カットの値に反映した一覧(押し出しとカットだけ)
@@ -83,7 +122,7 @@ enum SolidBuilder {
     }
 
     /// その特徴が足す(または削る)形
-    static func toolSolid(for f: Feature, shapes: [SketchShape]) -> Solid {
+    static func toolSolid(for f: Feature, shapes: [SketchShape], startConcave: Bool = false) -> Solid {
         let depth = nestingDepth(shapes)
         let (h0, h1, sketchAtBottom) = extent(of: f)
         let isMid = f.endCondition == .midPlane
@@ -113,10 +152,14 @@ enum SolidBuilder {
                     if !bottomIsEntry { bR = 0 }
                     if !topIsEntry { tR = 0 }
                 }
+                // 押し出しの付け根(元の形に接するスケッチ面側)は外へ広げて、すみRにする
+                let bConcave = startConcave && sketchAtBottom
+                let tConcave = startConcave && !sketchAtBottom
                 body = body.union(Solid(polygons: prism(
                     shape: shapes[i], plane: f.sketch.plane, h0: h0, h1: h1,
                     bottomR: bR, topR: tR,
-                    bottomFlare: isCut && bottomIsEntry, topFlare: isCut && topIsEntry)))
+                    bottomFlare: (isCut && bottomIsEntry) || bConcave,
+                    topFlare: (isCut && topIsEntry) || tConcave)))
             } else if isCut {
                 // カットの中の島
                 holes = holes.union(Solid(polygons: prism(
@@ -124,9 +167,12 @@ enum SolidBuilder {
                     bottomR: 0, topR: 0, bottomFlare: false, topFlare: false)))
             } else {
                 // 押し出しの中の穴(外へ広げた道具で、穴の入口のふちも丸める)
+                // (付け根が元の形に接している側は、穴のふちにならないので丸めない)
+                let bR = startConcave && sketchAtBottom ? 0 : bottomR
+                let tR = startConcave && !sketchAtBottom ? 0 : topR
                 holes = holes.union(Solid(polygons: prism(
                     shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
-                    bottomR: bottomR > 0 ? bottomR + ext : 0, topR: topR > 0 ? topR + ext : 0,
+                    bottomR: bR > 0 ? bR + ext : 0, topR: tR > 0 ? tR + ext : 0,
                     bottomFlare: true, topFlare: true)))
             }
         }

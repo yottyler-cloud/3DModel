@@ -275,6 +275,9 @@ struct StatusBar: View {
                 Spacer()
                 if !store.mesh.bounds.isEmpty && editor.sketch == nil {
                     let s = store.mesh.bounds.size
+                    if store.bodyCount > 1 {
+                        Text("ボディ \(store.bodyCount)").foregroundStyle(.secondary)
+                    }
                     Text("\(r(s.x)) × \(r(s.y)) × \(r(s.z)) mm").foregroundStyle(.secondary)
                 }
             }

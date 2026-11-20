@@ -16,6 +16,7 @@ final class ModelStore: ObservableObject {
     @Published private(set) var meshVersion = 0
     @Published private(set) var isBuilding = false
     @Published private(set) var messages: [String] = []
+    @Published private(set) var bodyCount = 0
 
     struct PreviewSpec: Equatable {
         var feature: Feature
@@ -32,11 +33,7 @@ final class ModelStore: ObservableObject {
     var canRedo: Bool { !redoStack.isEmpty }
 
     init() {
-        if let data = load() {
-            apply(data)
-        } else {
-            apply(ModelData(features: ModelStore.sample()))
-        }
+        if let data = load() { apply(data) }
         rebuild()
     }
 
@@ -146,10 +143,6 @@ final class ModelStore: ObservableObject {
         }
     }
 
-    func resetToSample() {
-        change { d in d = ModelData(features: ModelStore.sample()) }
-    }
-
     func newPart() {
         change { d in d = ModelData() }
     }
@@ -196,6 +189,7 @@ final class ModelStore: ObservableObject {
         guard token == buildToken else { return }
         mesh = result.mesh
         messages = result.messages
+        bodyCount = result.bodyCount
         meshVersion += 1
         isBuilding = false
     }
@@ -219,47 +213,6 @@ final class ModelStore: ObservableObject {
     private func load() -> ModelData? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? JSONDecoder().decode(ModelData.self, from: data)
-    }
-
-    // MARK: 見本
-
-    /// 角Rの板 → ボス → 貫通穴 → ポケット → フィレット
-    static func sample() -> [Feature] {
-        let top = RefPlane.top.plane
-
-        var s1 = SketchShape.rectangle(Vec2(-40, -25), Vec2(40, 25))
-        s1.setAllRadii(8)
-        var base = Feature(name: "押し出し1", kind: .extrude)
-        base.sketchName = "スケッチ1"
-        base.sketch = Sketch(plane: top, shapes: [s1])
-        base.distance = 12
-
-        let face12 = SketchPlane.from(normal: Vec3(0, 1, 0), through: Vec3(0, 12, 0), name: "面")
-        var boss = Feature(name: "押し出し2", kind: .extrude)
-        boss.sketchName = "スケッチ2"
-        boss.sketch = Sketch(plane: face12, shapes: [.circle(center: Vec2(-15, 0), radius: 12)])
-        boss.distance = 15
-
-        let face27 = SketchPlane.from(normal: Vec3(0, 1, 0), through: Vec3(0, 27, 0), name: "面")
-        var hole = Feature(name: "押し出しカット1", kind: .cut)
-        hole.sketchName = "スケッチ3"
-        hole.sketch = Sketch(plane: face27, shapes: [.circle(center: Vec2(-15, 0), radius: 5)])
-        hole.endCondition = .throughAll
-        hole.reversed = true
-
-        var slot = SketchShape.rectangle(Vec2(8, -12), Vec2(30, 12))
-        slot.setAllRadii(4)
-        var pocket = Feature(name: "押し出しカット2", kind: .cut)
-        pocket.sketchName = "スケッチ4"
-        pocket.sketch = Sketch(plane: face12, shapes: [slot])
-        pocket.distance = 6
-        pocket.reversed = true
-
-        var fillet = Feature(name: "フィレット1", kind: .fillet)
-        fillet.filletRadius = 2
-        fillet.filletEdges = [.end(base.id), .end(boss.id), .start(hole.id), .end(pocket.id)]
-
-        return [base, boss, hole, pocket, fillet]
     }
 }
 

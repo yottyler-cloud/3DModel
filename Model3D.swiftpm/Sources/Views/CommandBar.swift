@@ -43,11 +43,6 @@ struct CommandBar: View {
                 editor.selection = nil
                 store.newPart()
             }
-            Button("見本の部品") {
-                editor.cancelAll()
-                editor.selection = nil
-                store.resetToSample()
-            }
         }
     }
 
