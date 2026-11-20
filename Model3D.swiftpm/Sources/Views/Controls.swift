@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// ラベル付きの数値入力(mm)
+/// ラベル付きの数値入力(mm)。タップするとアプリ内のテンキーが開く
 struct NumberField: View {
     var label: String
     @Binding var value: Double
@@ -10,11 +10,7 @@ struct NumberField: View {
         HStack {
             Text(label)
             Spacer()
-            TextField(label, value: $value, format: .number.precision(.fractionLength(0...3)))
-                .keyboardType(.numbersAndPunctuation)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 90)
-                .textFieldStyle(.roundedBorder)
+            KeypadButton(key: label, title: label, value: $value, width: 96)
             Text(unit).foregroundStyle(.secondary).font(.footnote)
         }
     }
@@ -22,16 +18,43 @@ struct NumberField: View {
 
 struct CompactNumber: View {
     var prefix: String
+    var key: String
     @Binding var value: Double
 
     var body: some View {
         HStack(spacing: 2) {
             Text(prefix).font(.caption).foregroundStyle(.secondary)
-            TextField(prefix, value: $value, format: .number.precision(.fractionLength(0...3)))
-                .keyboardType(.numbersAndPunctuation)
-                .textFieldStyle(.roundedBorder)
-                .font(.footnote)
+            KeypadButton(key: key, title: key, value: $value, width: nil)
         }
+    }
+}
+
+/// 数値を表示し、タップでテンキーを開くボタン
+struct KeypadButton: View {
+    var key: String
+    var title: String
+    @Binding var value: Double
+    var width: CGFloat?
+    @EnvironmentObject private var keypad: Keypad
+
+    private var active: Bool { keypad.isOpen && keypad.activeKey == key }
+
+    var body: some View {
+        Button {
+            let binding = $value
+            keypad.open(key: key, title: title, value: value) { binding.wrappedValue = $0 }
+        } label: {
+            Text(active ? (keypad.buffer.isEmpty ? " " : keypad.buffer) : Format.mm((value * 1000).rounded() / 1000))
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .frame(maxWidth: width == nil ? .infinity : width, alignment: .trailing)
+                .padding(.horizontal, 6).padding(.vertical, 5)
+                .background(active ? Color.accentColor.opacity(0.12) : Color(uiColor: .systemBackground),
+                            in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .stroke(active ? Color.accentColor : Color.gray.opacity(0.4), lineWidth: active ? 1.5 : 1))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -93,13 +116,13 @@ struct ShapeEditorSection: View {
                 ForEach(shape.points.indices, id: \.self) { i in
                     HStack {
                         Text("\(i + 1)").frame(width: 22).foregroundStyle(.secondary)
-                        CompactNumber(prefix: "X", value: Binding(
+                        CompactNumber(prefix: "X", key: "頂点\(i + 1) X", value: Binding(
                             get: { i < shape.points.count ? shape.points[i].x : 0 },
                             set: { if i < shape.points.count { shape.points[i].x = $0 } }))
-                        CompactNumber(prefix: "Y", value: Binding(
+                        CompactNumber(prefix: "Y", key: "頂点\(i + 1) Y", value: Binding(
                             get: { i < shape.points.count ? shape.points[i].y : 0 },
                             set: { if i < shape.points.count { shape.points[i].y = $0 } }))
-                        CompactNumber(prefix: "R", value: Binding(
+                        CompactNumber(prefix: "R", key: "頂点\(i + 1) R", value: Binding(
                             get: { shape.radius(at: i) }, set: { shape.setRadius($0, at: i) }))
                     }
                 }

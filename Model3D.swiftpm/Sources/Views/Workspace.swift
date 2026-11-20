@@ -2,11 +2,13 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var editor = Editor(store: ModelStore())
+    @StateObject private var keypad = Keypad()
 
     var body: some View {
         Workspace()
             .environmentObject(editor)
             .environmentObject(editor.store)
+            .environmentObject(keypad)
     }
 }
 
@@ -14,6 +16,7 @@ struct ContentView: View {
 struct Workspace: View {
     @EnvironmentObject var editor: Editor
     @EnvironmentObject var store: ModelStore
+    @EnvironmentObject var keypad: Keypad
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,16 +29,16 @@ struct Workspace: View {
                 GraphicsArea()
             }
         }
-        .alert(editor.sketch?.dimension?.title ?? "寸法",
-               isPresented: Binding(get: { editor.sketch?.dimension != nil },
-                                    set: { if !$0 { editor.sketch?.dimension = nil } })) {
-            TextField("値(mm)", text: Binding(get: { editor.sketch?.dimension?.text ?? "" },
-                                             set: { editor.sketch?.dimension?.text = $0 }))
-                .keyboardType(.numbersAndPunctuation)
-            Button("OK") { editor.sketch?.applyDimension() }
-            Button("キャンセル", role: .cancel) { editor.sketch?.dimension = nil }
-        } message: {
-            Text("新しい値を mm で入力します")
+        .onChange(of: editor.sketch?.dimension?.id) { id in
+            // スマート寸法: テンキーで値を入れる
+            guard id != nil, let d = editor.sketch?.dimension else { return }
+            let editor = self.editor
+            keypad.open(key: "寸法", title: "寸法: \(d.title)", value: Double(d.text) ?? 0, live: false,
+                        apply: { v in
+                            editor.sketch?.dimension?.text = Format.mm(v)
+                            editor.sketch?.applyDimension()
+                        },
+                        onClose: { editor.sketch?.dimension = nil })
         }
         .onChange(of: store.meshVersion) { _ in editor.refreshExport() }
         .onAppear { editor.refreshExport() }

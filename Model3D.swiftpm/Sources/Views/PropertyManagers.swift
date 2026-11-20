@@ -3,6 +3,14 @@ import SwiftUI
 /// 左側のパネル: コマンド中は PropertyManager、それ以外はフィーチャーツリー
 struct LeftPanel: View {
     @EnvironmentObject var editor: Editor
+    @EnvironmentObject var keypad: Keypad
+
+    /// パネルの中身が変わったらテンキーを閉じる
+    private var panelState: String {
+        if let s = editor.sketch { return "sketch-\(s.selection?.uuidString ?? "")" }
+        if let s = editor.session { return "session-\(s.draft.id)" }
+        return "tree"
+    }
 
     var body: some View {
         Group {
@@ -19,6 +27,12 @@ struct LeftPanel: View {
             }
         }
         .background(Color(uiColor: .systemGroupedBackground))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if keypad.isOpen { KeypadView(keypad: keypad) }
+        }
+        .onChange(of: panelState) { _ in
+            if keypad.activeKey != "寸法" || editor.sketch == nil { keypad.close() }
+        }
     }
 }
 
