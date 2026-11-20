@@ -215,6 +215,33 @@ struct SketchPropertyManager: View {
                     }
                 }
 
+                Section {
+                    if (s?.dimensions ?? []).isEmpty {
+                        Text("寸法はまだありません").foregroundStyle(.secondary)
+                    }
+                    ForEach(s?.dimensions ?? []) { d in
+                        Button {
+                            editor.sketch?.editDimension(d)
+                        } label: {
+                            HStack {
+                                Text(dimensionName(d, s?.shapes ?? []))
+                                Spacer()
+                                Text((d.kind == .diameter ? "⌀" : "") + Format.mm((d.value * 1000).rounded() / 1000) + " mm")
+                                    .font(.body.monospacedDigit())
+                            }
+                        }
+                        .foregroundStyle(Color.primary)
+                    }
+                    .onDelete { idx in
+                        let ids = idx.compactMap { i in editor.sketch?.dimensions[i].id }
+                        for id in ids { editor.sketch?.deleteDimension(id) }
+                    }
+                } header: {
+                    Text("寸法")
+                } footer: {
+                    Text("「スマート寸法」で線や円をタップすると寸法が付きます。図の寸法の数字(または上の一覧)をタップすると値を変えられ、図形がその値に合わせて変わります。左へスワイプで削除。")
+                }
+
                 Section("オプション") {
                     Toggle("格子にスナップ", isOn: Binding(
                         get: { editor.sketch?.snapToGrid ?? true },
@@ -242,6 +269,14 @@ struct SketchPropertyManager: View {
                 }
             }
         }
+    }
+
+    private func dimensionName(_ d: SketchDimension, _ shapes: [SketchShape]) -> String {
+        let shape = shapes.first { $0.id == d.shapeID }
+        let n = (shapes.firstIndex { $0.id == d.shapeID } ?? 0) + 1
+        let base = "\(shape?.kind.label ?? "図形")\(n)"
+        if case .edge(let k) = d.kind { return "\(base) 辺\(k + 1)" }
+        return "\(base) \(d.kind.title)"
     }
 
     private func summary(_ s: SketchShape) -> String {

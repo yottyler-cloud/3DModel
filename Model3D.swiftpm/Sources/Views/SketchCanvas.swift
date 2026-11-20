@@ -11,6 +11,8 @@ struct SketchDrawing {
     var polyPoints: [Vec2]
     var cursor: Vec2?
     var highlightCorner: Vec2?
+    /// スケッチに残した寸法
+    var dimensions: [SketchDimension] = []
 
     func draw(_ ctx: inout GraphicsContext, size: CGSize, vp: SketchViewport) {
         drawGrid(&ctx, size: size, vp: vp)
@@ -38,7 +40,12 @@ struct SketchDrawing {
             let selected = s.id == selection
             ctx.stroke(path(s, vp), with: .color(selected ? .orange : .blue),
                        lineWidth: selected ? 2.5 : 1.6)
-            drawLabels(&ctx, s, vp: vp)
+            drawLabels(&ctx, s, vp: vp, showSize: !dimensions.contains { $0.shapeID == s.id })
+        }
+        // 寸法
+        for d in dimensions {
+            guard let shape = shapes.first(where: { $0.id == d.shapeID }) else { continue }
+            DimensionMath.draw(&ctx, d, shape, vp, selected: d.shapeID == selection)
         }
 
         if let p = previewShape, p.isValid {
@@ -94,18 +101,18 @@ struct SketchDrawing {
         return p
     }
 
-    private func drawLabels(_ ctx: inout GraphicsContext, _ s: SketchShape, vp: SketchViewport) {
+    private func drawLabels(_ ctx: inout GraphicsContext, _ s: SketchShape, vp: SketchViewport, showSize: Bool = true) {
         switch s.kind {
-        case .rectangle:
+        case .rectangle where showSize:
             let a = s.rectMin, sz = s.rectSize
             let top = vp.toScreen(Vec2(a.x + sz.x / 2, a.y + sz.y))
             ctx.draw(Text("\(Format.mm(sz.x)) × \(Format.mm(sz.y))").font(.caption2).foregroundColor(.secondary),
                      at: CGPoint(x: top.x, y: top.y - 4), anchor: .bottom)
-        case .circle:
+        case .circle where showSize:
             let c = vp.toScreen(s.points[0])
             ctx.draw(Text("⌀\(Format.mm(s.radius * 2))").font(.caption2).foregroundColor(.secondary),
                      at: c, anchor: .center)
-        case .polygon, .centerline:
+        case .rectangle, .circle, .polygon, .centerline:
             break
         }
         // 角のR

@@ -49,10 +49,9 @@ enum SketchTool: String, CaseIterable, Identifiable {
 
 /// スマート寸法の入力
 struct DimensionEdit: Identifiable {
-    enum Kind { case width, height, diameter, edge(Int) }
     var id = UUID()
     var shapeID: UUID
-    var kind: Kind
+    var kind: DimKind
     var title: String
     var text: String
 }
@@ -114,12 +113,54 @@ struct SketchSession {
     var cornerR: Double = 3
     var cornerC: Double = 2
     var snapToGrid = true
-    var undoStack: [[SketchShape]] = []
+    var undoStack: [Sketch] = []
     var dimension: DimensionEdit?
 
     var shapes: [SketchShape] {
         get { feature.sketch.shapes }
-        set { feature.sketch.shapes = newValue }
+        set {
+            feature.sketch.shapes = newValue
+            syncDimensions()
+        }
+    }
+
+    var dimensions: [SketchDimension] { feature.sketch.dims }
+
+    /// 寸法の値を図形に合わせる(図形が消えた寸法は消す)
+    mutating func syncDimensions() {
+        let shapes = feature.sketch.shapes
+        var dims: [SketchDimension] = []
+        for var d in feature.sketch.dims {
+            guard let shape = shapes.first(where: { $0.id == d.shapeID }),
+                  let v = DimensionMath.measure(d.kind, shape) else { continue }
+            d.value = v
+            dims.append(d)
+        }
+        if dims != feature.sketch.dims { feature.sketch.dims = dims }
+    }
+
+    mutating func deleteDimension(_ id: UUID) {
+        pushUndo()
+        feature.sketch.dims.removeAll { $0.id == id }
+    }
+
+    /// 寸法の数値をタップしたか
+    func hitDimension(_ s: CGPoint, _ env: SketchEnv) -> SketchDimension? {
+        let vp = viewport(env.size)
+        var best: (SketchDimension, CGFloat)?
+        for d in dimensions {
+            guard let shape = shapes.first(where: { $0.id == d.shapeID }),
+                  let p = DimensionMath.placement(d, shape, vp) else { continue }
+            let dist = hypot(p.label.x - s.x, p.label.y - s.y)
+            if dist < 28 && dist < (best?.1 ?? .infinity) { best = (d, dist) }
+        }
+        return best?.0
+    }
+
+    /// 寸法の値の入力を始める
+    mutating func editDimension(_ d: SketchDimension) {
+        selection = d.shapeID
+        dimension = DimensionEdit(shapeID: d.shapeID, kind: d.kind, title: d.kind.title, text: Format.mm(d.value))
     }
 
     var plane: SketchPlane { feature.sketch.plane }
@@ -147,6 +188,10 @@ struct SketchSession {
         case .line:
             cursor = snap(s, env)
         case .select:
+            if let d = hitDimension(s, env) {
+                editDimension(d)
+                return
+            }
             selection = hitShape(s, env)
             if let id = selection, let shape = shapes.first(where: { $0.id == id }) {
                 moveAnchor = vp.toWorld(s)
@@ -167,7 +212,7 @@ struct SketchSession {
         case .select:
             guard let anchor = moveAnchor, let original = moveOriginal,
                   let i = shapes.firstIndex(where: { $0.id == original.id }) else { return }
-            if shapes[i] == original && undoStack.last != shapes { pushUndo() }
+            if shapes[i] == original && undoStack.last?.shapes != shapes { pushUndo() }
             let ref = original.points[0]
             let target = snapWorld(ref + (vp.toWorld(s) - anchor), env, excluding: original.id)
             var moved = original
@@ -258,7 +303,7 @@ struct SketchSession {
     }
 
     mutating func pushUndo() {
-        undoStack.append(shapes)
+        undoStack.append(feature.sketch)
         if undoStack.count > 100 { undoStack.removeFirst() }
     }
 
@@ -268,8 +313,9 @@ struct SketchSession {
             return
         }
         guard let last = undoStack.popLast() else { return }
-        shapes = last
-        if let s = selection, !last.contains(where: { $0.id == s }) { selection = nil }
+        feature.sketch.dimensions = last.dimensions
+        shapes = last.shapes
+        if let s = selection, !last.shapes.contains(where: { $0.id == s }) { selection = nil }
     }
 
     mutating func setAllCornerRadii(_ r: Double) {
@@ -307,47 +353,44 @@ struct SketchSession {
     // MARK: スマート寸法
 
     private mutating func startDimension(at s: CGPoint, _ env: SketchEnv) {
+        // すでにある寸法の数値をタップしたら、その値を変える
+        if let d = hitDimension(s, env) {
+            editDimension(d)
+            return
+        }
         let vp = viewport(env.size)
         let w = vp.toWorld(s)
         let tol = Double(16 / scale)
-        var best: (DimensionEdit, Double)?
-        func consider(_ d: DimensionEdit, _ dist: Double) {
-            if dist < tol && dist < (best?.1 ?? .infinity) { best = (d, dist) }
+        var best: (UUID, DimKind, Double)?
+        func consider(_ id: UUID, _ kind: DimKind, _ dist: Double) {
+            if dist < tol && dist < (best?.2 ?? .infinity) { best = (id, kind, dist) }
         }
         for shape in shapes where shape.isValid {
             switch shape.kind {
             case .rectangle:
                 let c = shape.corners
-                let size = shape.rectSize
                 for i in 0..<4 {
-                    let d = Polygon2D.distanceToSegment(w, c[i], c[(i + 1) % 4])
-                    let horizontal = i % 2 == 0
-                    consider(DimensionEdit(shapeID: shape.id, kind: horizontal ? .width : .height,
-                                           title: horizontal ? "幅" : "高さ",
-                                           text: Format.mm(horizontal ? size.x : size.y)), d)
+                    consider(shape.id, i % 2 == 0 ? .width : .height,
+                             Polygon2D.distanceToSegment(w, c[i], c[(i + 1) % 4]))
                 }
             case .circle:
-                let d = abs(w.distance(to: shape.points[0]) - shape.radius)
-                consider(DimensionEdit(shapeID: shape.id, kind: .diameter, title: "直径",
-                                       text: Format.mm(shape.radius * 2)), d)
+                consider(shape.id, .diameter, abs(w.distance(to: shape.points[0]) - shape.radius))
             case .centerline:
-                break
+                consider(shape.id, .length, Polygon2D.distanceToSegment(w, shape.points[0], shape.points[1]))
             case .polygon:
                 let p = shape.points
                 for i in p.indices {
-                    let a = p[i], b = p[(i + 1) % p.count]
-                    consider(DimensionEdit(shapeID: shape.id, kind: .edge(i), title: "長さ",
-                                           text: Format.mm(a.distance(to: b))),
-                             Polygon2D.distanceToSegment(w, a, b))
+                    consider(shape.id, .edge(i), Polygon2D.distanceToSegment(w, p[i], p[(i + 1) % p.count]))
                 }
             }
         }
-        if let b = best {
-            selection = b.0.shapeID
-            dimension = b.0
-        }
+        guard let b = best, let shape = shapes.first(where: { $0.id == b.0 }),
+              let v = DimensionMath.measure(b.1, shape) else { return }
+        selection = b.0
+        dimension = DimensionEdit(shapeID: b.0, kind: b.1, title: b.1.title, text: Format.mm((v * 1000).rounded() / 1000))
     }
 
+    /// 入力した寸法を残し、図形をその値に合わせる
     mutating func applyDimension() {
         guard let d = dimension else { return }
         dimension = nil
@@ -356,16 +399,20 @@ struct SketchSession {
         guard let v = Double(text), v > 0,
               let i = shapes.firstIndex(where: { $0.id == d.shapeID }) else { return }
         pushUndo()
-        var shape = shapes[i]
-        switch d.kind {
-        case .width: shape.setRect(origin: shape.rectMin, size: Vec2(v, shape.rectSize.y))
-        case .height: shape.setRect(origin: shape.rectMin, size: Vec2(shape.rectSize.x, v))
-        case .diameter: shape.radius = v / 2
-        case .edge(let k):
-            let a = shape.points[k], j = (k + 1) % shape.points.count
-            let dir = (shape.points[j] - a).normalized
-            shape.points[j] = a + dir * v
+        var dims = feature.sketch.dims
+        if let k = dims.firstIndex(where: { $0.shapeID == d.shapeID && $0.kind == d.kind }) {
+            dims[k].value = v
+        } else {
+            dims.append(SketchDimension(shapeID: d.shapeID, kind: d.kind, value: v))
         }
+        feature.sketch.dims = dims
+        // 寸法の付いた辺(この図形)
+        var dimensioned = Set<Int>()
+        for x in dims where x.shapeID == d.shapeID {
+            if case .edge(let k) = x.kind { dimensioned.insert(k) }
+        }
+        var shape = shapes[i]
+        DimensionMath.apply(d.kind, value: v, to: &shape, dimensioned: dimensioned)
         shapes[i] = shape
     }
 

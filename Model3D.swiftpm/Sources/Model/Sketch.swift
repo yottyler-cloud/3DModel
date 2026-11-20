@@ -442,4 +442,6 @@ enum ProfileGeometry {
 struct Sketch: Codable, Hashable {
     var plane = RefPlane.top.plane
     var shapes: [SketchShape] = []
+    /// 寸法(dims で読み書きする)
+    var dimensions: [SketchDimension]?
 }

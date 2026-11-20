@@ -172,7 +172,7 @@ struct SketchOverlay: View {
         return SketchDrawing(shapes: s.shapes, references: env.references, selection: s.selection,
                              axisLabels: ("", ""), previewShape: preview,
                              polyPoints: s.polyPoints, cursor: s.cursor ?? s.dragCurrent,
-                             highlightCorner: nil)
+                             highlightCorner: nil, dimensions: s.dimensions)
     }
 }
 
