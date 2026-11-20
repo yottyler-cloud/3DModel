@@ -17,7 +17,7 @@ struct LeftPanel: View {
             if editor.sketch != nil {
                 SketchPropertyManager()
             } else if let s = editor.session {
-                if s.draft.kind == .fillet {
+                if s.draft.kind.isEdgeFeature {
                     FilletPropertyManager()
                 } else {
                     ExtrudePropertyManager()
@@ -110,12 +110,17 @@ struct FilletPropertyManager: View {
 
     var body: some View {
         let draft = editor.session?.draft
+        let kind = draft?.kind ?? .fillet
+        let isChamfer = kind == .chamfer
         VStack(spacing: 0) {
-            PMHeader(title: draft?.name ?? "", symbol: FeatureKind.fillet.symbol,
+            PMHeader(title: draft?.name ?? "", symbol: kind.symbol,
                      onOK: { editor.confirmFeature() }, onCancel: { editor.cancelFeature() })
             Form {
-                Section("フィレット パラメータ") {
-                    NumberField(label: "半径", value: editor.draft(\.filletRadius, 3))
+                Section(isChamfer ? "面取り パラメータ" : "フィレット パラメータ") {
+                    NumberField(label: isChamfer ? "距離 C" : "半径 R", value: editor.draft(\.filletRadius, 3))
+                    if isChamfer {
+                        Text("両側に同じ長さで45°に面取りします").font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section {
                     if draft?.filletEdges.isEmpty ?? true {
@@ -141,9 +146,9 @@ struct FilletPropertyManager: View {
                         }
                     }
                 } header: {
-                    Text("フィレットするアイテム")
+                    Text(isChamfer ? "面取りするアイテム" : "フィレットするアイテム")
                 } footer: {
-                    Text("押し出しのふち(スケッチ面側・先端側)、カットの入口と底、角の縦のエッジを選べます。ふちを選ぶと、そのフィーチャーの同じ側のふちがすべて丸くなります。")
+                    Text("押し出しのふち(スケッチ面側・先端側)、カットの入口と底、角の縦のエッジを選べます。ふちを選ぶと、そのフィーチャーの同じ側のふちがすべて\(isChamfer ? "面取り" : "丸く")になります。")
                 }
                 Section("名前") {
                     TextField("名前", text: editor.draft(\.name, ""))
@@ -169,6 +174,18 @@ struct SketchPropertyManager: View {
                     Text(s?.tool.hint ?? "").font(.footnote).foregroundStyle(.secondary)
                     if s?.tool == .line, (s?.polyPoints.count ?? 0) >= 3 {
                         Button("線を閉じる") { editor.sketch?.finishPolygon() }
+                    }
+                }
+
+                if s?.tool == .sketchChamfer {
+                    Section("スケッチ面取り") {
+                        NumberField(label: "距離 C", value: Binding(
+                            get: { editor.sketch?.cornerC ?? 2 },
+                            set: { editor.sketch?.cornerC = max(0, $0) }))
+                        Button("すべての角につける") {
+                            if let c = editor.sketch?.cornerC { editor.sketch?.setAllCornerChamfers(c) }
+                        }
+                        Button("すべての角Cを外す") { editor.sketch?.setAllCornerChamfers(0) }
                     }
                 }
 

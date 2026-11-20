@@ -85,7 +85,7 @@ final class Editor: ObservableObject {
         }
         if let s = session {
             switch s.draft.kind {
-            case .fillet: return "フィレットするエッジをグラフィックス領域でタップしてください"
+            case .fillet, .chamfer: return "\(s.draft.kind.label)するエッジをグラフィックス領域でタップしてください"
             default: return "条件を入れて ✓ で確定します"
             }
         }
@@ -308,9 +308,10 @@ final class Editor: ObservableObject {
         session = FeatureSession(draft: f, isNew: true, replacing: sk.id)
     }
 
-    func filletButton() {
+    /// フィレット・面取りのボタン
+    func edgeFeatureButton(_ kind: FeatureKind) {
         if sketch != nil {
-            chooseTool(.sketchFillet)
+            chooseTool(kind == .chamfer ? .sketchChamfer : .sketchFillet)
             return
         }
         guard session == nil else { return }
@@ -318,8 +319,8 @@ final class Editor: ObservableObject {
             flash("先に押し出しで形をつくってください")
             return
         }
-        var f = Feature(name: store.nextName(.fillet), kind: .fillet)
-        f.filletRadius = 3
+        var f = Feature(name: store.nextName(kind), kind: kind)
+        f.filletRadius = kind == .chamfer ? 1 : 3
         selection = nil
         tab = .features
         session = FeatureSession(draft: f, isNew: true, replacing: nil)
@@ -338,8 +339,8 @@ final class Editor: ObservableObject {
 
     func confirmFeature() {
         guard let s = session else { return }
-        if s.draft.kind == .fillet && s.draft.filletEdges.isEmpty {
-            flash("フィレットするエッジを選んでください")
+        if s.draft.kind.isEdgeFeature && s.draft.filletEdges.isEmpty {
+            flash("\(s.draft.kind.label)するエッジを選んでください")
             return
         }
         if s.isNew {
@@ -377,7 +378,7 @@ final class Editor: ObservableObject {
     func tapped(face: SceneHit?, edge: EdgeRef?) {
         if sketch != nil { return }
         if let s = session {
-            if s.draft.kind == .fillet {
+            if s.draft.kind.isEdgeFeature {
                 guard let e = edge else { return }
                 if let i = s.draft.filletEdges.firstIndex(of: e) {
                     session?.draft.filletEdges.remove(at: i)
@@ -405,7 +406,7 @@ final class Editor: ObservableObject {
 
     /// フィレットで選べるエッジ(対象は押し出し・カット)
     func edgeCandidates() -> [EdgeCandidate] {
-        guard let s = session, s.draft.kind == .fillet else { return [] }
+        guard let s = session, s.draft.kind.isEdgeFeature else { return [] }
         var fs = store.featuresForBuild().filter { $0.id != s.draft.id }
         if let i = store.index(of: s.draft.id) {
             // 既存フィレットの編集: それより前のフィーチャーだけ

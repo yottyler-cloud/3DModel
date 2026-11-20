@@ -160,11 +160,43 @@ struct SketchShape: Codable, Identifiable, Hashable {
     mutating func setRadius(_ r: Double, at i: Int) {
         let n = corners.count
         if cornerRadii.count < n { cornerRadii += Array(repeating: 0, count: n - cornerRadii.count) }
-        if i < n { cornerRadii[i] = max(0, r) }
+        if i < n {
+            cornerRadii[i] = max(0, r)
+            if r > 0 { setChamferValue(0, at: i) }
+        }
     }
 
     mutating func setAllRadii(_ r: Double) {
         cornerRadii = Array(repeating: max(0, r), count: corners.count)
+        if r > 0 { cornerChamfers = nil }
+    }
+
+    // MARK: 角の面取り(C)。R と C は同じ角に同時にはつかない
+
+    /// 角ごとの面取りの長さ(古い保存データには無いので省略可)
+    var cornerChamfers: [Double]?
+
+    func chamfer(at i: Int) -> Double {
+        guard let c = cornerChamfers, i < c.count else { return 0 }
+        return c[i]
+    }
+
+    private mutating func setChamferValue(_ c: Double, at i: Int) {
+        let n = corners.count
+        var list = cornerChamfers ?? []
+        if list.count < n { list += Array(repeating: 0, count: n - list.count) }
+        if i < n { list[i] = max(0, c) }
+        cornerChamfers = list
+    }
+
+    mutating func setChamfer(_ c: Double, at i: Int) {
+        setChamferValue(c, at: i)
+        if c > 0, i < cornerRadii.count { cornerRadii[i] = 0 }
+    }
+
+    mutating func setAllChamfers(_ c: Double) {
+        cornerChamfers = Array(repeating: max(0, c), count: corners.count)
+        if c > 0 { cornerRadii = Array(repeating: 0, count: corners.count) }
     }
 }
 
@@ -173,15 +205,17 @@ enum ProfileGeometry {
     static let circleSegments = 48
     static let arcSegments = 6
 
-    /// 反時計回りに並べた角と、その角のR
-    static func ccwCorners(_ shape: SketchShape) -> (pts: [Vec2], radii: [Double]) {
+    /// 反時計回りに並べた角と、その角のR・C
+    static func ccwCorners(_ shape: SketchShape) -> (pts: [Vec2], radii: [Double], chamfers: [Double]) {
         var pts = shape.corners
         var radii = (0..<pts.count).map { shape.radius(at: $0) }
+        var chamfers = (0..<pts.count).map { shape.chamfer(at: $0) }
         if Polygon2D.signedArea(pts) < 0 {
             pts.reverse()
             radii.reverse()
+            chamfers.reverse()
         }
-        return (pts, radii)
+        return (pts, radii, chamfers)
     }
 
     /// 図形の輪郭(反時計回り)。inset > 0 なら内側へ、< 0 なら外側へずらした輪郭。
@@ -196,7 +230,7 @@ enum ProfileGeometry {
                 return c + Vec2(cos(a), sin(a)) * r
             }
         case .rectangle, .polygon:
-            let (base, radii) = ccwCorners(shape)
+            let (base, radii, chamfers) = ccwCorners(shape)
             let pts = Polygon2D.offset(base, by: inset)
             let n = pts.count
             var out: [Vec2] = []
@@ -204,18 +238,44 @@ enum ProfileGeometry {
             for i in 0..<n {
                 let prev = pts[(i + n - 1) % n], p = pts[i], next = pts[(i + 1) % n]
                 let convex = (p - prev).cross(next - p) > 0
+                let iPrev = (i + n - 1) % n, iNext = (i + 1) % n
+                let shareA = radii[iPrev] > 0 || chamfers[iPrev] > 0 ? 0.5 : 1.0
+                let shareB = radii[iNext] > 0 || chamfers[iNext] > 0 ? 0.5 : 1.0
+                if chamfers[i] > 0 && radii[i] <= 0 {
+                    // 面取り: ずらした分だけ、角からの長さを直す
+                    let d1 = (prev - p).normalized, d2 = (next - p).normalized
+                    let half = acos(max(-1, min(1, d1.dot(d2)))) / 2
+                    var t = chamfers[i]
+                    if abs(inset) > 1e-12, sin(half) > 1e-6, cos(half) > 1e-6 {
+                        let shift = (inset - inset / sin(half)) / cos(half)
+                        t = convex ? t + shift : t - shift
+                    }
+                    out.append(contentsOf: chamferCorner(prev: prev, p: p, next: next, setback: max(t, 0),
+                                                         shareA: shareA, shareB: shareB))
+                    continue
+                }
                 var r = radii[i]
                 if r > 0 || !convex {
                     // 内側へずらすと、凸の角のRは小さく、凹の角のRは大きくなる
                     r = convex ? max(r - inset, 0) : max(r + inset, 0)
                 }
-                let rPrev = radii[(i + n - 1) % n] > 0 ? 0.5 : 1.0
-                let rNext = radii[(i + 1) % n] > 0 ? 0.5 : 1.0
                 out.append(contentsOf: corner(prev: prev, p: p, next: next, radius: r,
-                                              shareA: rPrev, shareB: rNext))
+                                              shareA: shareA, shareB: shareB))
             }
             return out
         }
+    }
+
+    /// 1つの角を面取りした点列(常に arcSegments+1 個、直線上に並ぶ)
+    static func chamferCorner(prev: Vec2, p: Vec2, next: Vec2, setback: Double,
+                              shareA: Double, shareB: Double) -> [Vec2] {
+        let count = arcSegments + 1
+        let la = (prev - p).length, lb = (next - p).length
+        guard setback > 1e-9, la > 1e-9, lb > 1e-9 else { return Array(repeating: p, count: count) }
+        let t = min(setback, min(la * shareA, lb * shareB) * 0.999)
+        let t1 = p + (prev - p).normalized * t
+        let t2 = p + (next - p).normalized * t
+        return (0..<count).map { t1 + (t2 - t1) * (Double($0) / Double(count - 1)) }
     }
 
     /// 1つの角を丸めた点列(常に arcSegments+1 個)

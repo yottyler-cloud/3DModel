@@ -148,6 +148,7 @@ struct FeatureTree: View {
         case .extrude: return .blue
         case .cut: return .pink
         case .fillet: return .orange
+        case .chamfer: return .purple
         }
     }
 

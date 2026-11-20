@@ -96,7 +96,12 @@ struct SketchDrawing {
         for (i, p) in s.corners.enumerated() {
             let sp = vp.toScreen(p)
             let r = s.radius(at: i)
-            if r > 0 {
+            let c = s.chamfer(at: i)
+            if c > 0 && r <= 0 {
+                ctx.fill(Path(ellipseIn: CGRect(x: sp.x - 3, y: sp.y - 3, width: 6, height: 6)), with: .color(.purple))
+                ctx.draw(Text("C\(Format.mm(c))").font(.caption2.bold()).foregroundColor(.purple),
+                         at: CGPoint(x: sp.x + 5, y: sp.y + 5), anchor: .topLeading)
+            } else if r > 0 {
                 ctx.fill(Path(ellipseIn: CGRect(x: sp.x - 3, y: sp.y - 3, width: 6, height: 6)), with: .color(.pink))
                 ctx.draw(Text("R\(Format.mm(r))").font(.caption2.bold()).foregroundColor(.pink),
                          at: CGPoint(x: sp.x + 5, y: sp.y + 5), anchor: .topLeading)

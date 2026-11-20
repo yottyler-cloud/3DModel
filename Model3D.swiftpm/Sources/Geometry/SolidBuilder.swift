@@ -74,19 +74,26 @@ enum SolidBuilder {
     /// フィレット特徴の指定を、対象の押し出し・カットの値に反映した一覧(押し出しとカットだけ)
     static func effective(_ features: [Feature]) -> [Feature] {
         var fs = features.filter { !$0.suppressed }
-        for f in fs where f.kind == .fillet {
+        // 前から順に反映する(同じエッジは後のフィレット・面取りが優先)
+        for f in fs where f.kind.isEdgeFeature {
             let r = max(0, f.filletRadius)
+            let isChamfer = f.kind == .chamfer
             for e in f.filletEdges {
                 guard let i = fs.firstIndex(where: { $0.id == e.featureID }) else { continue }
                 switch e {
                 case .start:
-                    fs[i].startFillet = max(fs[i].startFillet, r)
+                    fs[i].startFillet = r
+                    fs[i].startIsChamfer = isChamfer
                 case .end:
-                    fs[i].endFillet = max(fs[i].endFillet, r)
+                    fs[i].endFillet = r
+                    fs[i].endIsChamfer = isChamfer
                 case .corner(_, let shapeID, let k):
                     if let j = fs[i].sketch.shapes.firstIndex(where: { $0.id == shapeID }) {
-                        let cur = fs[i].sketch.shapes[j].radius(at: k)
-                        fs[i].sketch.shapes[j].setRadius(max(cur, r), at: k)
+                        if isChamfer {
+                            fs[i].sketch.shapes[j].setChamfer(r, at: k)
+                        } else {
+                            fs[i].sketch.shapes[j].setRadius(r, at: k)
+                        }
                     }
                 }
             }
@@ -128,12 +135,17 @@ enum SolidBuilder {
         let isMid = f.endCondition == .midPlane
         // フィレットを下端(h0)・上端(h1)へ割り当てる
         let startR = f.startFillet, endR = f.endFillet
+        let startC = f.startIsChamfer ?? false, endC = f.endIsChamfer ?? false
         var bottomR = sketchAtBottom ? startR : endR
         var topR = sketchAtBottom ? endR : startR
+        var bottomC = sketchAtBottom ? startC : endC
+        var topC = sketchAtBottom ? endC : startC
         if isMid {
             // 中間平面のときは両端とも「先端」
             bottomR = endR
             topR = endR
+            bottomC = endC
+            topC = endC
         }
         // カット: 入口(スケッチ面側)のふちは凸 → 道具を外へ広げる。先端(底)は道具を内へ丸める
         let isCut = f.kind == .cut
@@ -159,7 +171,8 @@ enum SolidBuilder {
                     shape: shapes[i], plane: f.sketch.plane, h0: h0, h1: h1,
                     bottomR: bR, topR: tR,
                     bottomFlare: (isCut && bottomIsEntry) || bConcave,
-                    topFlare: (isCut && topIsEntry) || tConcave)))
+                    topFlare: (isCut && topIsEntry) || tConcave,
+                    bottomChamfer: bottomC, topChamfer: topC)))
             } else if isCut {
                 // カットの中の島
                 holes = holes.union(Solid(polygons: prism(
@@ -173,7 +186,8 @@ enum SolidBuilder {
                 holes = holes.union(Solid(polygons: prism(
                     shape: shapes[i], plane: f.sketch.plane, h0: h0 - ext, h1: h1 + ext,
                     bottomR: bR > 0 ? bR + ext : 0, topR: tR > 0 ? tR + ext : 0,
-                    bottomFlare: true, topFlare: true)))
+                    bottomFlare: true, topFlare: true,
+                    bottomChamfer: bottomC, topChamfer: topC)))
             }
         }
         return body.subtract(holes)
@@ -182,7 +196,8 @@ enum SolidBuilder {
     /// 図形を h0〜h1 まで押し出した柱。端のエッジを半径Rで丸められる。
     /// flare = true のときは丸めの向きが外側(穴の入口を丸めるための道具形状)。
     static func prism(shape: SketchShape, plane: SketchPlane, h0: Double, h1: Double,
-                      bottomR: Double, topR: Double, bottomFlare: Bool, topFlare: Bool) -> [CSGPolygon] {
+                      bottomR: Double, topR: Double, bottomFlare: Bool, topFlare: Bool,
+                      bottomChamfer: Bool = false, topChamfer: Bool = false) -> [CSGPolygon] {
         let height = h1 - h0
         guard height > 1e-9 else { return [] }
         var rb = max(0, bottomR), rt = max(0, topR)
@@ -198,7 +213,10 @@ enum SolidBuilder {
         // 段(高さ, 内側へのずらし量)
         var rings: [(h: Double, inset: Double)] = []
         let steps = filletSteps
-        if rb > 1e-6 {
+        if rb > 1e-6 && bottomChamfer {
+            // 面取り: 斜めの1段
+            rings.append((h0, (bottomFlare ? -1.0 : 1.0) * rb))
+        } else if rb > 1e-6 {
             let sign = bottomFlare ? -1.0 : 1.0
             for k in 0..<steps {
                 let phi = Double.pi / 2 * Double(k) / Double(steps)
@@ -209,7 +227,9 @@ enum SolidBuilder {
         if height - rb - rt > 1e-6 || rings.count == 1 {
             rings.append((h1 - rt, 0))
         }
-        if rt > 1e-6 {
+        if rt > 1e-6 && topChamfer {
+            rings.append((h1, (topFlare ? -1.0 : 1.0) * rt))
+        } else if rt > 1e-6 {
             let sign = topFlare ? -1.0 : 1.0
             for k in 1...steps {
                 let phi = Double.pi / 2 * Double(k) / Double(steps)

@@ -62,7 +62,11 @@ struct CommandBar: View {
             }
             CommandButton(title: "フィレット", symbol: FeatureKind.fillet.symbol,
                           active: editor.session?.draft.kind == .fillet) {
-                editor.filletButton()
+                editor.edgeFeatureButton(.fillet)
+            }
+            CommandButton(title: "面取り", symbol: FeatureKind.chamfer.symbol,
+                          active: editor.session?.draft.kind == .chamfer) {
+                editor.edgeFeatureButton(.chamfer)
             }
             Divider().frame(height: 44).padding(.horizontal, 4)
             CommandButton(title: editor.sketch == nil ? "スケッチ" : "スケッチ終了",

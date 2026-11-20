@@ -1,7 +1,10 @@
 import Foundation
 
 enum FeatureKind: String, Codable {
-    case sketch, extrude, cut, fillet
+    case sketch, extrude, cut, fillet, chamfer
+
+    /// エッジを選んで使うフィーチャー(フィレット・面取り)
+    var isEdgeFeature: Bool { self == .fillet || self == .chamfer }
 
     var label: String {
         switch self {
@@ -9,6 +12,7 @@ enum FeatureKind: String, Codable {
         case .extrude: return "押し出し"
         case .cut: return "押し出しカット"
         case .fillet: return "フィレット"
+        case .chamfer: return "面取り"
         }
     }
 
@@ -18,6 +22,7 @@ enum FeatureKind: String, Codable {
         case .extrude: return "square.stack.3d.up.fill"
         case .cut: return "square.stack.3d.down.dottedline"
         case .fillet: return "app.connected.to.app.below.fill"
+        case .chamfer: return "righttriangle"
         }
     }
 }
@@ -71,7 +76,11 @@ struct Feature: Codable, Identifiable, Hashable {
     var startFillet: Double = 0
     var endFillet: Double = 0
 
-    // フィレット
+    /// 端のエッジを面取り(C)にするか(フィレット・面取り特徴から計算時に入る値)
+    var startIsChamfer: Bool?
+    var endIsChamfer: Bool?
+
+    // フィレット・面取り(面取りでは filletRadius が距離 C)
     var filletRadius: Double = 3
     var filletEdges: [EdgeRef] = []
 
@@ -84,7 +93,7 @@ struct Feature: Codable, Identifiable, Hashable {
         set { merge = newValue }
     }
 
-    var hasSketch: Bool { kind != .fillet }
+    var hasSketch: Bool { !kind.isEdgeFeature }
 
     var summary: String {
         switch kind {
@@ -100,6 +109,8 @@ struct Feature: Codable, Identifiable, Hashable {
             }
         case .fillet:
             return "R\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"
+        case .chamfer:
+            return "C\(Format.mm(filletRadius))  エッジ \(filletEdges.count)"
         }
     }
 }

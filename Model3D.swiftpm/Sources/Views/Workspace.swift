@@ -60,7 +60,7 @@ struct GraphicsArea: View {
                     overlays: overlays,
                     viewCommand: editor.viewCommand,
                     sketchCamera: sketchCamera,
-                    edgeCandidates: editor.session?.draft.kind == .fillet ? editor.edgeCandidates() : [],
+                    edgeCandidates: editor.session?.draft.kind.isEdgeFeature == true ? editor.edgeCandidates() : [],
                     onTap: { face, edge in editor.tapped(face: face, edge: edge) })
 
                 if editor.sketch != nil {
@@ -108,7 +108,7 @@ struct GraphicsArea: View {
                                     emphasized: editor.selection == .feature(f.id)))
         }
         if let s = editor.session {
-            if s.draft.kind == .fillet {
+            if s.draft.kind.isEdgeFeature {
                 o.selectedEdges = editor.edges(of: s.draft.filletEdges, excluding: s.draft.id)
             } else {
                 o.sketches.append(.init(plane: s.draft.sketch.plane, shapes: s.draft.sketch.shapes, emphasized: true))
@@ -122,7 +122,7 @@ struct GraphicsArea: View {
             o.faceTriangles = tris
         case .feature(let id)?:
             if let f = store.feature(id) {
-                if f.kind == .fillet {
+                if f.kind.isEdgeFeature {
                     o.selectedEdges = editor.edges(of: f.filletEdges, excluding: f.id)
                 } else if f.kind != .sketch {
                     o.sketches.append(.init(plane: f.sketch.plane, shapes: f.sketch.shapes, emphasized: true))

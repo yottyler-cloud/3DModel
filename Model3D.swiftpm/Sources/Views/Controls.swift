@@ -124,6 +124,8 @@ struct ShapeEditorSection: View {
                             set: { if i < shape.points.count { shape.points[i].y = $0 } }))
                         CompactNumber(prefix: "R", key: "頂点\(i + 1) R", value: Binding(
                             get: { shape.radius(at: i) }, set: { shape.setRadius($0, at: i) }))
+                        CompactNumber(prefix: "C", key: "頂点\(i + 1) C", value: Binding(
+                            get: { shape.chamfer(at: i) }, set: { shape.setChamfer($0, at: i) }))
                     }
                 }
             }
@@ -134,8 +136,16 @@ struct ShapeEditorSection: View {
     @ViewBuilder private var cornerFields: some View {
         let names = ["左下", "右下", "右上", "左上"]
         ForEach(0..<4, id: \.self) { i in
-            NumberField(label: "\(names[i])の角R", value: Binding(
-                get: { shape.radius(at: i) }, set: { shape.setRadius($0, at: i) }))
+            HStack {
+                Text("\(names[i])の角")
+                Spacer()
+                CompactNumber(prefix: "R", key: "\(names[i])の角R", value: Binding(
+                    get: { shape.radius(at: i) }, set: { shape.setRadius($0, at: i) }))
+                    .frame(width: 90)
+                CompactNumber(prefix: "C", key: "\(names[i])の角C", value: Binding(
+                    get: { shape.chamfer(at: i) }, set: { shape.setChamfer($0, at: i) }))
+                    .frame(width: 90)
+            }
         }
     }
 }

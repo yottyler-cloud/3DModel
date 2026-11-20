@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SketchTool: String, CaseIterable, Identifiable {
-    case select, line, cornerRect, centerRect, circle, sketchFillet, dimension
+    case select, line, cornerRect, centerRect, circle, sketchFillet, sketchChamfer, dimension
     var id: String { rawValue }
 
     var label: String {
@@ -12,6 +12,7 @@ enum SketchTool: String, CaseIterable, Identifiable {
         case .centerRect: return "中心矩形"
         case .circle: return "円"
         case .sketchFillet: return "スケッチフィレット"
+        case .sketchChamfer: return "スケッチ面取り"
         case .dimension: return "スマート寸法"
         }
     }
@@ -24,6 +25,7 @@ enum SketchTool: String, CaseIterable, Identifiable {
         case .centerRect: return "plus.rectangle"
         case .circle: return "circle"
         case .sketchFillet: return "square.on.circle"
+        case .sketchChamfer: return "righttriangle"
         case .dimension: return "ruler"
         }
     }
@@ -36,6 +38,7 @@ enum SketchTool: String, CaseIterable, Identifiable {
         case .centerRect: return "中心から角へドラッグ"
         case .circle: return "中心から外へドラッグ"
         case .sketchFillet: return "角をタップして丸める(もう一度で外す)"
+        case .sketchChamfer: return "角をタップして面取り(もう一度で外す)"
         case .dimension: return "辺や円をタップして寸法を入力"
         }
     }
@@ -106,6 +109,7 @@ struct SketchSession {
     var moveAnchor: Vec2?
     var moveOriginal: SketchShape?
     var cornerR: Double = 3
+    var cornerC: Double = 2
     var snapToGrid = true
     var undoStack: [[SketchShape]] = []
     var dimension: DimensionEdit?
@@ -145,7 +149,7 @@ struct SketchSession {
                 moveAnchor = vp.toWorld(s)
                 moveOriginal = shape
             }
-        case .sketchFillet, .dimension:
+        case .sketchFillet, .sketchChamfer, .dimension:
             break
         }
     }
@@ -166,7 +170,7 @@ struct SketchSession {
             var moved = original
             moved.translate(by: target - ref)
             shapes[i] = moved
-        case .sketchFillet, .dimension:
+        case .sketchFillet, .sketchChamfer, .dimension:
             break
         }
     }
@@ -203,7 +207,9 @@ struct SketchSession {
             moveAnchor = nil
             moveOriginal = nil
         case .sketchFillet:
-            toggleFillet(at: s, env)
+            toggleFillet(at: s, env, chamfer: false)
+        case .sketchChamfer:
+            toggleFillet(at: s, env, chamfer: true)
         case .dimension:
             startDimension(at: s, env)
         }
@@ -261,7 +267,12 @@ struct SketchSession {
         for i in shapes.indices { shapes[i].setAllRadii(r) }
     }
 
-    private mutating func toggleFillet(at s: CGPoint, _ env: SketchEnv) {
+    mutating func setAllCornerChamfers(_ c: Double) {
+        pushUndo()
+        for i in shapes.indices { shapes[i].setAllChamfers(c) }
+    }
+
+    private mutating func toggleFillet(at s: CGPoint, _ env: SketchEnv, chamfer: Bool) {
         let vp = viewport(env.size)
         var best: (shape: Int, corner: Int, d: CGFloat)?
         for (si, shape) in shapes.enumerated() {
@@ -273,8 +284,13 @@ struct SketchSession {
         }
         guard let b = best else { return }
         pushUndo()
-        let current = shapes[b.shape].radius(at: b.corner)
-        shapes[b.shape].setRadius(abs(current - cornerR) < 1e-9 ? 0 : cornerR, at: b.corner)
+        if chamfer {
+            let current = shapes[b.shape].chamfer(at: b.corner)
+            shapes[b.shape].setChamfer(abs(current - cornerC) < 1e-9 ? 0 : cornerC, at: b.corner)
+        } else {
+            let current = shapes[b.shape].radius(at: b.corner)
+            shapes[b.shape].setRadius(abs(current - cornerR) < 1e-9 ? 0 : cornerR, at: b.corner)
+        }
         selection = shapes[b.shape].id
     }
 
