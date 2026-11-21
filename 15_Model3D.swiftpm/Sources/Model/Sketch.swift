@@ -312,8 +312,11 @@ enum ProfileGeometry {
                         let na = (bp - bPrev).normalized.perp
                         let nb = (bNext - bp).normalized.perp
                         let nf = (t2 - t1).normalized.perp
+                        // ずらす量が面取りより大きいと、面取りの線が角の外側へ裏返る(輪郭がねじれる)。
+                        // そのときは面取りが消えたものとして、ふつうの角にする
                         if let q1 = intersect(na, na.dot(bp) + oa, nf, nf.dot(t1) + d),
-                           let q2 = intersect(nf, nf.dot(t1) + d, nb, nb.dot(bp) + ob) {
+                           let q2 = intersect(nf, nf.dot(t1) + d, nb, nb.dot(bp) + ob),
+                           (q1 - p).dot(prev - p) > 1e-9, (q2 - p).dot(next - p) > 1e-9 {
                             let count = arcSegments + 1
                             out.append(contentsOf: (0..<count).map { q1 + (q2 - q1) * (Double($0) / Double(count - 1)) })
                             continue
