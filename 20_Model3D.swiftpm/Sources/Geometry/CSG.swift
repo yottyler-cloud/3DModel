@@ -272,6 +272,22 @@ struct Solid {
         return v / 6
     }
 
+    /// 平面の法線方向に、高さ a〜b の範囲を A〜B へ引きのばす(断面の形はそのまま)
+    func stretched(along plane: SketchPlane, from a: Double, _ b: Double, to A: Double, _ B: Double) -> Solid {
+        let n: Vec3 = plane.normal
+        let k: Double = (B - A) / Swift.max(b - a, 1e-12)
+        var out: [CSGPolygon] = []
+        for p in polygons {
+            let vs: [Vec3] = p.vertices.map { v in
+                let h: Double = plane.distance(v)
+                let h2: Double = A + (h - a) * k
+                return v + n * (h2 - h)
+            }
+            if let q = CSGPolygon(vertices: vs) { out.append(q) }
+        }
+        return Solid(polygons: out)
+    }
+
     /// 平行移動
     func translated(by d: Vec3) -> Solid {
         Solid(polygons: polygons.map { p in

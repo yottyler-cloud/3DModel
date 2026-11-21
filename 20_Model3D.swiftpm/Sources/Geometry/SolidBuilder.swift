@@ -118,12 +118,20 @@ enum SolidBuilder {
         for t in f.sideTreatments ?? [] where !t.atEnd { r = Swift.max(r, t.size) }
         guard r > 1e-6, !bodies.isEmpty else { return tool }
         let (h0, h1, atBottom) = extent(of: f)
-        let hs: Double = atBottom ? h0 : h1          // スケッチ面(付け根)の高さ
-        let dir: Double = atBottom ? 1.0 : -1.0      // 押し出す向き
-        let band: Double = r * 1.01
-        let plane = f.sketch.plane
+        let hs: Double = atBottom ? h0 : h1
+        let dir: Double = atBottom ? 1.0 : -1.0
         let body = Solid(polygons: bodies.flatMap { $0.polygons })
-        var bb = body.bounds
+        return clipFlare(tool, plane: f.sketch.plane, hs: hs, dir: dir, band: r * 1.01,
+                         shapes: shapes, coreInset: 0, base: body)
+    }
+
+    /// 付け根の面(高さ hs)から dir の向きへ band の層のうち、
+    /// base(下の形)の断面の外側にはみ出した部分を tool から取り除く。図形の柱(core)はそのまま残す。
+    /// base の断面は、面のふちの面取りなどの影響を受けないよう、少し深いところの断面を使う
+    static func clipFlare(_ tool: Solid, plane: SketchPlane, hs: Double, dir: Double, band: Double,
+                          shapes: [SketchShape], coreInset: Double, base: Solid) -> Solid {
+        guard band > 1e-6, !base.isEmpty else { return tool }
+        var bb = base.bounds
         let tb = tool.bounds
         bb.add(tb.min)
         bb.add(tb.max)
@@ -133,17 +141,30 @@ enum SolidBuilder {
         func slab(_ a: Double, _ b: Double) -> Solid {
             Solid(polygons: prism(shape: rect, plane: plane, h0: Swift.min(a, b), h1: Swift.max(a, b), bottom: [], top: []))
         }
-        // すみRがある高さの層
-        let layer = slab(hs, hs + dir * band)
-        // 付け根の面のすぐ下にある元の形を、すみRの高さまで持ち上げたもの(ここにはすみRがあってよい)
-        let below = body.intersect(slab(hs - dir * band, hs))
-        let support = below.translated(by: plane.normal * (dir * band))
-        // ボス自体(すみRなし)はそのまま残す
+        // 下の形の、付け根の面から見た深さ
+        var avail: Double = 0
+        for p in base.polygons {
+            for v in p.vertices {
+                let d: Double = (hs - plane.distance(v)) * dir
+                avail = Swift.max(avail, d)
+            }
+        }
+        guard avail > 1e-4 else { return tool }
+        let depth: Double = Swift.min(band, avail * 0.5)
+        let thin: Double = Swift.min(0.2, depth * 0.5)
+        // 深さ depth の薄い断面を取り出し、すみRの層いっぱいに引きのばす(これが「下に形がある範囲」)
+        let sa: Double = hs - dir * depth
+        let sb: Double = hs - dir * (depth - thin)
+        let slice = base.intersect(slab(sa, sb))
+        let support = slice.stretched(along: plane, from: Swift.min(sa, sb), Swift.max(sa, sb),
+                                      to: Swift.min(hs, hs + dir * band), Swift.max(hs, hs + dir * band))
         var core = Solid.empty
         for s in shapes {
             core = core.union(Solid(polygons: prism(shape: s, plane: plane, h0: Swift.min(hs, hs + dir * band),
-                                                    h1: Swift.max(hs, hs + dir * band), bottom: [], top: [])))
+                                                    h1: Swift.max(hs, hs + dir * band), bottom: [], top: [],
+                                                    baseInset: coreInset)))
         }
+        let layer = slab(hs, hs + dir * band)
         let unsupported = layer.subtract(support).subtract(core)
         return tool.subtract(unsupported)
     }
@@ -490,11 +511,16 @@ enum SolidBuilder {
             switch f.kind {
             case .extrude:
                 let startOpen = open.contains(.start(f.id)), endOpen = open.contains(.end(f.id))
+                // 付け根のすみR(ほかの形に接している側): 内側は同じ中心で、R + 厚み の曲面になる
+                var rootR: Double = touch ? f.startFillet : 0
+                if touch { for st in f.sideTreatments ?? [] where !st.atEnd { rootR = Swift.max(rootR, st.size) } }
+                let rooted = touch && rootR > 1e-6 && !startOpen
                 // 端をどれだけ外へ延ばすか(負なら縮める)
                 func grow(_ isStart: Bool) -> Double {
                     if isStart ? startOpen : endOpen { return far }
-                    // ほかの形に接する側: 中の空洞をつなげる(面で接するだけだと計算が不安定なので少し重ねる)
-                    if isStart && touch { return t + min(t * 0.5, 1) }
+                    // ほかの形に接する側: 中の空洞をつなげる
+                    // (すみRがあれば、内側のすみRが始まる高さ=厚みの分だけ下から。なければ少し重ねる)
+                    if isStart && touch { return rooted ? t : t + min(t * 0.5, 1) }
                     return -t
                 }
                 let hb = h0 - grow(bottomIsStart), ht = h1 + grow(topIsStart)
@@ -523,12 +549,44 @@ enum SolidBuilder {
                         }
                         return list
                     }
+                    // 付け根の内側のすみR(辺ごと): 外側に R があれば R + 厚み、なければ角のまま
+                    func rootInner() -> [EndTreatment] {
+                        let n = ProfileGeometry.sideCount(shape)
+                        var list = Array(repeating: EndTreatment.none, count: n)
+                        for k in 0..<n {
+                            var size: Double = f.startFillet
+                            var chamfer = f.startIsChamfer ?? false
+                            for st in f.sideTreatments ?? [] where st.shapeID == shape.id && !st.atEnd && st.side == k {
+                                size = st.size
+                                chamfer = st.chamfer
+                            }
+                            if size > 1e-6 { list[k] = EndTreatment(size: size + t, chamfer: chamfer, flare: true) }
+                        }
+                        return list
+                    }
                     let bOpen = bottomIsStart ? startOpen || touch : (isMid ? endOpen : endOpen)
                     let tOpen = topIsStart ? startOpen || touch : endOpen
+                    let bottomT = bottomIsStart && rooted ? rootInner() : shrunk(bottomIsStart, open: bOpen)
+                    let topT = topIsStart && rooted ? rootInner() : shrunk(topIsStart, open: tOpen)
                     var piece = Solid(polygons: prism(shape: shape, plane: plane, h0: hb, h1: ht,
-                                                      bottom: shrunk(bottomIsStart, open: bOpen),
-                                                      top: shrunk(topIsStart, open: tOpen), baseInset: t,
+                                                      bottom: bottomT, top: topT, baseInset: t,
                                                       sideBase: sideBase))
+                    if rooted {
+                        let hs: Double = bottomIsStart ? h0 : h1
+                        let dir: Double = bottomIsStart ? 1.0 : -1.0
+                        // 下の空洞と確実につながるよう、付け根の下に少し重なる柱を足す
+                        let ov: Double = t + Swift.min(t * 0.5, 1)
+                        piece = piece.union(Solid(polygons: prism(shape: shape, plane: plane,
+                                                                  h0: Swift.min(hs - dir * ov, hs - dir * (t - 0.01)),
+                                                                  h1: Swift.max(hs - dir * ov, hs - dir * (t - 0.01)),
+                                                                  bottom: [], top: [], baseInset: t)))
+                        // 内側のすみRも、下の空洞(これまでの内側の形)の範囲からはみ出さないように切る
+                        var below = Solid.empty
+                        for (p, add) in pieces { below = add ? below.union(p) : below.subtract(p) }
+                        piece = clipFlare(piece, plane: plane, hs: hs - dir * t, dir: dir, band: (rootR + t) * 1.01,
+                                          shapes: shapes.enumerated().filter { depth[$0.offset] % 2 == 0 }.map { $0.element },
+                                          coreInset: t, base: below)
+                    }
                     // 形の中の穴: 穴のまわりにも厚みを残す
                     for (j, hole) in shapes.enumerated() where depth[j] % 2 == 1 {
                         piece = piece.subtract(Solid(polygons: prism(shape: hole, plane: plane, h0: hb - 1, h1: ht + 1,
