@@ -17,6 +17,8 @@ final class ModelStore: ObservableObject {
     @Published private(set) var isBuilding = false
     @Published private(set) var messages: [String] = []
     @Published private(set) var bodyCount = 0
+    /// いまの形のソリッド(断面表示に使う)
+    private(set) var solid = Solid.empty
 
     struct PreviewSpec: Equatable {
         var feature: Feature
@@ -190,6 +192,7 @@ final class ModelStore: ObservableObject {
         mesh = result.mesh
         messages = result.messages
         bodyCount = result.bodyCount
+        solid = result.solid
         meshVersion += 1
         isBuilding = false
     }

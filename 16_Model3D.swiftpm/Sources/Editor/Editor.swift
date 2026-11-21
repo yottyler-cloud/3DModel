@@ -121,6 +121,78 @@ final class Editor: ObservableObject {
         viewCommand = ViewCommand(serial: viewCommand.serial + 1, kind: kind)
     }
 
+    // MARK: 断面表示
+
+    @Published var section: SectionView? {
+        didSet { if section != oldValue { updateSection() } }
+    }
+    @Published private(set) var sectionMesh: TriMesh?
+    @Published private(set) var sectionCaps: [Vec3] = []
+    @Published private(set) var sectionVersion = 0
+    private var sectionToken = 0
+
+    /// 表示するメッシュの番号(断面表示中は別の番号)
+    var displayVersion: Int {
+        section != nil && sectionMesh != nil ? 1_000_000 + sectionVersion : store.meshVersion
+    }
+
+    /// 断面の平面(0: 正面, 1: 平面, 2: 右側面, 3: 選択した面)
+    func sectionPlane(_ kind: Int) -> SketchPlane? {
+        switch kind {
+        case 0: return RefPlane.front.plane
+        case 1: return RefPlane.top.plane
+        case 2: return RefPlane.right.plane
+        default:
+            if let p = selection?.sketchPlane, case .face? = selection { return p }
+            return section?.kind == 3 ? section?.plane : nil
+        }
+    }
+
+    /// 平面の法線方向の、形の範囲
+    func sectionRange(_ plane: SketchPlane) -> ClosedRange<Double> {
+        guard let r = store.mesh.range(along: plane), r.max - r.min > 1e-6 else { return -50...50 }
+        return r.min...r.max
+    }
+
+    func toggleSection() {
+        if section != nil {
+            section = nil
+            return
+        }
+        var kind = 0
+        if case .face? = selection { kind = 3 }
+        setSectionKind(kind)
+    }
+
+    func setSectionKind(_ kind: Int) {
+        guard let plane = sectionPlane(kind) else { return }
+        let r = sectionRange(plane)
+        section = SectionView(kind: kind, plane: plane, offset: ((r.lowerBound + r.upperBound) / 2 * 100).rounded() / 100,
+                              flip: section?.flip ?? false)
+    }
+
+    /// 断面を計算し直す(形が変わったときも呼ぶ)
+    func updateSection() {
+        sectionToken += 1
+        let token = sectionToken
+        guard let s = section else {
+            sectionMesh = nil
+            sectionCaps = []
+            return
+        }
+        let solid = store.solid
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let r = SectionBuilder.build(solid, s)
+            guard let editor = self else { return }
+            await MainActor.run {
+                guard token == editor.sectionToken else { return }
+                editor.sectionMesh = r.mesh
+                editor.sectionCaps = r.caps
+                editor.sectionVersion += 1
+            }
+        }
+    }
+
     func flash(_ message: String) {
         toast = message
         let m = message
@@ -492,6 +564,10 @@ final class Editor: ObservableObject {
             if s.draft.kind == .shell {
                 // 開口にする面: タップした平らな面
                 guard let hit = face else { return }
+                if section != nil {
+                    flash("断面表示中は面を選べません。断面を閉じてから選んでください")
+                    return
+                }
                 guard let r = capRef(for: hit) else {
                     flash("押し出しでできた平らな面(上下・側面)を選んでください")
                     return
@@ -523,6 +599,10 @@ final class Editor: ObservableObject {
         }
         guard let hit = face else {
             selection = nil
+            return
+        }
+        if section != nil {
+            flash("断面表示中は面を選べません。断面を閉じてから選んでください")
             return
         }
         if store.mesh.isPlanar(hit.triangle) {

@@ -10,6 +10,8 @@ enum SolidBuilder {
         var mesh: TriMesh
         var messages: [String]
         var bodyCount: Int
+        /// 計算したソリッド(断面表示に使う)
+        var solid = Solid.empty
     }
 
     static func build(_ features: [Feature]) -> Result {
@@ -105,7 +107,7 @@ enum SolidBuilder {
             }
         }
         let all = Solid(polygons: bodies.flatMap { $0.polygons })
-        return Result(mesh: TriMesh(solid: all), messages: messages, bodyCount: bodies.count)
+        return Result(mesh: TriMesh(solid: all), messages: messages, bodyCount: bodies.count, solid: all)
     }
 
     /// 押し出しのスケッチ面側(始まりの面)に、ほかの形が接しているか

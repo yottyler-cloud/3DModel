@@ -14,6 +14,7 @@ struct ContentView: View {
 
 /// 上にコマンド、左にツリー/PropertyManager、右にグラフィックス領域
 struct Workspace: View {
+    static var demoSectionPending = ProcessInfo.processInfo.arguments.contains("-demoSection")
     @EnvironmentObject var editor: Editor
     @EnvironmentObject var store: ModelStore
     @EnvironmentObject var keypad: Keypad
@@ -40,7 +41,15 @@ struct Workspace: View {
                         },
                         onClose: { editor.sketch?.dimension = nil })
         }
-        .onChange(of: store.meshVersion) { _ in editor.refreshExport() }
+        .onChange(of: store.meshVersion) { _ in
+            editor.refreshExport()
+            if editor.section != nil { editor.updateSection() }
+            // Mac での確認用: 起動オプション -demoSection で、最初から断面表示にする
+            if Workspace.demoSectionPending && !store.mesh.positions.isEmpty {
+                Workspace.demoSectionPending = false
+                editor.toggleSection()
+            }
+        }
         .onAppear { editor.refreshExport() }
     }
 }
@@ -56,8 +65,8 @@ struct GraphicsArea: View {
         GeometryReader { geo in
             ZStack {
                 ModelSceneView(
-                    mesh: store.mesh,
-                    meshVersion: store.meshVersion,
+                    mesh: editor.section != nil ? (editor.sectionMesh ?? store.mesh) : store.mesh,
+                    meshVersion: editor.displayVersion,
                     showEdges: editor.showEdges,
                     overlays: overlays,
                     viewCommand: editor.viewCommand,
@@ -93,6 +102,18 @@ struct GraphicsArea: View {
                     Spacer()
                 }
                 .padding(10)
+
+                if editor.section != nil && editor.sketch == nil {
+                    VStack {
+                        HStack {
+                            SectionPanel()
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 62)
+                    .padding(.leading, 10)
+                }
             }
             .onAppear { editor.canvasSize = geo.size }
             .onChange(of: geo.size) { editor.canvasSize = $0 }
@@ -108,6 +129,7 @@ struct GraphicsArea: View {
 
     private var overlays: SceneOverlays {
         var o = SceneOverlays()
+        if editor.section != nil { o.sectionCaps = editor.sectionCaps }
         if editor.sketch != nil { return o }
         // まだ使っていないスケッチは青で表示
         for f in store.featuresForBuild() where f.kind == .sketch {
@@ -221,6 +243,13 @@ struct HeadsUpBar: View {
                 Image(systemName: editor.showEdges ? "cube.fill" : "cube")
             }
             .disabled(editor.sketch != nil)
+            Button {
+                editor.toggleSection()
+            } label: {
+                Image(systemName: "rectangle.split.2x1")
+                    .foregroundStyle(editor.section != nil ? Color.orange : Color.accentColor)
+            }
+            .disabled(editor.sketch != nil)
         }
         .font(.body)
         .padding(.horizontal, 16)
@@ -308,4 +337,48 @@ struct StatusBar: View {
     }
 
     private func r(_ v: Double) -> String { Format.mm((v * 10).rounded() / 10) }
+}
+
+/// 断面表示の設定パネル
+struct SectionPanel: View {
+    @EnvironmentObject var editor: Editor
+
+    var body: some View {
+        let s = editor.section
+        let range = s.map { editor.sectionRange($0.plane) } ?? -50...50
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "rectangle.split.2x1").foregroundStyle(.orange)
+                Text("断面表示").font(.subheadline.bold())
+                Spacer()
+                Button {
+                    editor.section = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+            }
+            Picker("平面", selection: Binding(get: { s?.kind ?? 0 }, set: { editor.setSectionKind($0) })) {
+                Text("正面").tag(0)
+                Text("平面").tag(1)
+                Text("右側面").tag(2)
+                if editor.sectionPlane(3) != nil { Text("選択面").tag(3) }
+            }
+            .pickerStyle(.segmented)
+            Slider(value: Binding(get: { min(max(s?.offset ?? 0, range.lowerBound), range.upperBound) },
+                                  set: { editor.section?.offset = ($0 * 10).rounded() / 10 }),
+                   in: range)
+            HStack {
+                Text("位置").font(.footnote)
+                Spacer()
+                KeypadButton(key: "断面の位置", title: "断面の位置", value: Binding(
+                    get: { editor.section?.offset ?? 0 }, set: { editor.section?.offset = $0 }), width: 80)
+                Text("mm").font(.footnote).foregroundStyle(.secondary)
+            }
+            Toggle("反対側を表示", isOn: Binding(get: { s?.flip ?? false }, set: { editor.section?.flip = $0 }))
+                .font(.footnote)
+        }
+        .padding(10)
+        .frame(width: 250)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
 }

@@ -49,6 +49,8 @@ struct SceneOverlays: Equatable {
     var faceTriangles: [Int] = []
     var plane: SketchPlane?
     var selectedEdges: [EdgeCandidate] = []
+    /// 断面の切り口(3点ずつ)
+    var sectionCaps: [Vec3] = []
 }
 
 /// スケッチ中のカメラ(平面に垂直・平行投影で、2Dのスケッチ画面と同じ範囲を映す)
@@ -361,6 +363,21 @@ struct ModelSceneView: UIViewRepresentable {
                 overlayNode.addChildNode(node)
                 overlayNode.addChildNode(Coordinator.segments(Coordinator.loopSegments(corners, closed: true),
                                                               color: .systemTeal, onTop: true))
+            }
+
+            if !o.sectionCaps.isEmpty {
+                let vs = o.sectionCaps.map { SCNVector3(Float($0.x), Float($0.y), Float($0.z)) }
+                let indices = (0..<Int32(vs.count)).map { $0 }
+                let g = SCNGeometry(sources: [SCNGeometrySource(vertices: vs)],
+                                    elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+                let m = SCNMaterial()
+                m.lightingModel = .constant
+                m.diffuse.contents = UIColor(red: 0.95, green: 0.55, blue: 0.2, alpha: 1)
+                m.isDoubleSided = true
+                g.materials = [m]
+                let node = SCNNode(geometry: g)
+                node.renderingOrder = 40
+                overlayNode.addChildNode(node)
             }
 
             for e in o.selectedEdges {
