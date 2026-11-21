@@ -13,3 +13,4 @@
   - アプリのビルド: `NN_Model3D.swiftpm` で `xcodebuild -scheme Model3D -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`
   - 不具合の出た部品データ(アプリの「データ」で書き出した JSON)は Tests/GeometryCheck/models に入れておく
   - 画面の確認: iPad mini シミュレーターでビルド・起動し `xcrun simctl io <id> screenshot` で撮る(タップはできないので、確認用の起動オプションを使う。例: -demoSection)
+  - iPad の Swift Playgrounds は Mac の Xcode より型の推論が弱いことがある。`(条件 ? -1 : 1) * …` のような書き方は避け、数値の型(Double など)を明示する

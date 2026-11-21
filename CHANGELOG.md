@@ -2,6 +2,10 @@
 
 アプリ上部のタブの右にバージョン(Ver.01 など)が出ます。
 
+## Ver.17
+- iPad の Swift Playgrounds で断面表示のコードがコンパイルエラー(Cannot convert value of type 'Vec3' to expected argument type 'Double')になったのを修正
+  - 数字の型をコンパイラが決められなかったため、型を明示した(Mac の Xcode では通っていた)
+
 ## Ver.16
 - 断面表示を追加(3D表示の上のボタンの右端)
   - 正面・平面・右側面、または選んだ平らな面で、モデルを切った断面を表示(表示だけで、モデルは変えない)
