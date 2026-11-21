@@ -5,8 +5,9 @@
   - `NN_Model3D.swiftpm/Sources/Model/AppVersion.swift` の `number`
   - `NN_Model3D.swiftpm/Package.swift` の `displayVersion` と `bundleVersion`(同じ番号)
   - `CHANGELOG.md` の先頭に「## Ver.NN」と変更内容を日本語で追加
-- 変更をプッシュしたら、ユーザーへの返答の最後に、その版のバージョン番号と ZIP のダウンロードリンクを付ける
-  - `https://github.com/yottyler-cloud/3dmodel/archive/refs/heads/<ブランチ名>.zip`
+  - ダウンロード用の ZIP を作り直す: `Downloads/NN_Model3D.zip`(中身は `NN_Model3D.swiftpm` だけ)。古い版の ZIP は消す
+- 変更をプッシュしたら、ユーザーへの返答の最後に、その版のバージョン番号と ZIP の直接ダウンロードリンクを付ける
+  - `https://github.com/yottyler-cloud/3dmodel/raw/refs/heads/<ブランチ名>/Downloads/NN_Model3D.zip`
 - ユーザーへの返答は日本語
 - Mac が使えるときは、変更後に確かめる
   - 形の計算: `zsh Tests/GeometryCheck/run.sh`(Tests/GeometryCheck/models の部品データを計算して、案内が出ないか)
