@@ -1,7 +1,7 @@
 import Foundation
 
 /// 断面表示の設定(表示だけで、モデルは変えない)
-struct SectionView: Equatable {
+struct SectionView: Codable, Equatable {
     /// 0: 正面, 1: 平面, 2: 右側面, 3: 選択した面
     var kind: Int
     var plane: SketchPlane

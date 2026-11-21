@@ -272,6 +272,16 @@ struct Solid {
         return v / 6
     }
 
+    /// 平行移動
+    func translated(by d: Vec3) -> Solid {
+        Solid(polygons: polygons.map { p in
+            var q = p
+            q.vertices = p.vertices.map { $0 + d }
+            q.plane.w += q.plane.normal.dot(d)
+            return q
+        })
+    }
+
     func subtract(_ other: Solid) -> Solid {
         if isEmpty || other.isEmpty { return self }
         if !bounds.intersects(other.bounds) { return self }

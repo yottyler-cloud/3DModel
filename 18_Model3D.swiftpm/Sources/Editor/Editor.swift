@@ -84,6 +84,8 @@ final class Editor: ObservableObject {
 
     init(store: ModelStore) {
         self.store = store
+        // 保持していた断面表示を戻す(形の計算が終わったら断面を作る)
+        section = store.savedSection
     }
 
     // MARK: 案内
@@ -154,14 +156,32 @@ final class Editor: ObservableObject {
         return r.min...r.max
     }
 
+    /// 断面のパネルを開いているか(閉じても断面の見た目は残る)
+    @Published var sectionPanelOpen = false
+
+    /// 断面表示のボタン: 表示していなければ始め、表示中なら解除する
     func toggleSection() {
         if section != nil {
-            section = nil
+            endSection()
             return
         }
         var kind = 0
         if case .face? = selection { kind = 3 }
         setSectionKind(kind)
+        sectionPanelOpen = true
+    }
+
+    /// ✓: 断面の位置を決めて、見た目をそのまま保持する
+    func confirmSection() {
+        sectionPanelOpen = false
+        store.saveSection(section)
+    }
+
+    /// 断面表示をやめる
+    func endSection() {
+        section = nil
+        sectionPanelOpen = false
+        store.saveSection(nil)
     }
 
     func setSectionKind(_ kind: Int) {

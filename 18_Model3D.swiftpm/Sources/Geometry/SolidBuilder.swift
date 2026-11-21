@@ -88,7 +88,9 @@ enum SolidBuilder {
                 if f.mergeResult {
                     // スケッチ面側に形が接していれば、付け根のフィレットは元の面へなだらかにつなぐ
                     let concave = startTouchesBody(f, bodies: bodies)
-                    let tool = toolSolid(for: f, shapes: shapes, startConcave: concave)
+                    var tool = toolSolid(for: f, shapes: shapes, startConcave: concave)
+                    // 付け根のすみRは、下に元の形がある範囲だけにつける(ふちからはみ出さない)
+                    if concave { tool = clipRootFillet(tool, f, shapes: shapes, bodies: bodies) }
                     let tb = tool.bounds
                     var merged = tool
                     var rest: [Solid] = []
@@ -108,6 +110,42 @@ enum SolidBuilder {
         }
         let all = Solid(polygons: bodies.flatMap { $0.polygons })
         return Result(mesh: TriMesh(solid: all), messages: messages, bodyCount: bodies.count, solid: all)
+    }
+
+    /// 付け根のすみR(外へ広げた部分)のうち、下に元の形がない部分を取り除く
+    static func clipRootFillet(_ tool: Solid, _ f: Feature, shapes: [SketchShape], bodies: [Solid]) -> Solid {
+        var r: Double = f.startFillet
+        for t in f.sideTreatments ?? [] where !t.atEnd { r = Swift.max(r, t.size) }
+        guard r > 1e-6, !bodies.isEmpty else { return tool }
+        let (h0, h1, atBottom) = extent(of: f)
+        let hs: Double = atBottom ? h0 : h1          // スケッチ面(付け根)の高さ
+        let dir: Double = atBottom ? 1.0 : -1.0      // 押し出す向き
+        let band: Double = r * 1.01
+        let plane = f.sketch.plane
+        let body = Solid(polygons: bodies.flatMap { $0.polygons })
+        var bb = body.bounds
+        let tb = tool.bounds
+        bb.add(tb.min)
+        bb.add(tb.max)
+        let big: Double = bb.size.length + 10
+        let c = plane.project(bb.center)
+        let rect = SketchShape.rectangle(c - Vec2(big, big), c + Vec2(big, big))
+        func slab(_ a: Double, _ b: Double) -> Solid {
+            Solid(polygons: prism(shape: rect, plane: plane, h0: Swift.min(a, b), h1: Swift.max(a, b), bottom: [], top: []))
+        }
+        // すみRがある高さの層
+        let layer = slab(hs, hs + dir * band)
+        // 付け根の面のすぐ下にある元の形を、すみRの高さまで持ち上げたもの(ここにはすみRがあってよい)
+        let below = body.intersect(slab(hs - dir * band, hs))
+        let support = below.translated(by: plane.normal * (dir * band))
+        // ボス自体(すみRなし)はそのまま残す
+        var core = Solid.empty
+        for s in shapes {
+            core = core.union(Solid(polygons: prism(shape: s, plane: plane, h0: Swift.min(hs, hs + dir * band),
+                                                    h1: Swift.max(hs, hs + dir * band), bottom: [], top: [])))
+        }
+        let unsupported = layer.subtract(support).subtract(core)
+        return tool.subtract(unsupported)
     }
 
     /// 押し出しのスケッチ面側(始まりの面)に、ほかの形が接しているか

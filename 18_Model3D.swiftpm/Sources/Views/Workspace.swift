@@ -15,6 +15,7 @@ struct ContentView: View {
 /// 上にコマンド、左にツリー/PropertyManager、右にグラフィックス領域
 struct Workspace: View {
     static var demoSectionPending = ProcessInfo.processInfo.arguments.contains("-demoSection")
+        || ProcessInfo.processInfo.arguments.contains("-demoSectionKeep")
     @EnvironmentObject var editor: Editor
     @EnvironmentObject var store: ModelStore
     @EnvironmentObject var keypad: Keypad
@@ -48,6 +49,7 @@ struct Workspace: View {
             if Workspace.demoSectionPending && !store.mesh.positions.isEmpty {
                 Workspace.demoSectionPending = false
                 editor.toggleSection()
+                if ProcessInfo.processInfo.arguments.contains("-demoSectionKeep") { editor.confirmSection() }
             }
         }
         .onAppear { editor.refreshExport() }
@@ -106,7 +108,11 @@ struct GraphicsArea: View {
                 if editor.section != nil && editor.sketch == nil {
                     VStack {
                         HStack {
-                            SectionPanel()
+                            if editor.sectionPanelOpen {
+                                SectionPanel()
+                            } else {
+                                SectionChip()
+                            }
                             Spacer()
                         }
                         Spacer()
@@ -352,9 +358,14 @@ struct SectionPanel: View {
                 Text("断面表示").font(.subheadline.bold())
                 Spacer()
                 Button {
-                    editor.section = nil
+                    editor.confirmSection()
                 } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.green)
+                }
+                Button {
+                    editor.endSection()
+                } label: {
+                    Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.red)
                 }
             }
             Picker("平面", selection: Binding(get: { s?.kind ?? 0 }, set: { editor.setSectionKind($0) })) {
@@ -376,9 +387,34 @@ struct SectionPanel: View {
             }
             Toggle("反対側を表示", isOn: Binding(get: { s?.flip ?? false }, set: { editor.section?.flip = $0 }))
                 .font(.footnote)
+            Text("✓ で断面の見た目をそのまま保持します(部品と一緒に保存)")
+                .font(.caption2).foregroundStyle(.secondary)
         }
         .padding(10)
         .frame(width: 250)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// 断面を保持しているときの小さな表示(編集・解除)
+struct SectionChip: View {
+    @EnvironmentObject var editor: Editor
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "rectangle.split.2x1").foregroundStyle(.orange)
+            Text("断面表示中").font(.footnote.bold())
+            if let s = editor.section {
+                Text("\(s.plane.name) \(Format.mm(s.offset)) mm").font(.caption).foregroundStyle(.secondary)
+            }
+            Button("編集") { editor.sectionPanelOpen = true }
+                .font(.footnote)
+            Button("解除") { editor.endSection() }
+                .font(.footnote)
+                .foregroundStyle(.red)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.regularMaterial, in: Capsule())
     }
 }

@@ -174,6 +174,8 @@ struct ModelData: Codable {
     var partName = "部品1"
     var features: [Feature] = []
     var rollbackIndex: Int?
+    /// 保持している断面表示(なければ nil)
+    var section: SectionView?
 }
 
 enum Format {

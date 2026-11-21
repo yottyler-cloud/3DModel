@@ -17,6 +17,8 @@ final class ModelStore: ObservableObject {
     @Published private(set) var isBuilding = false
     @Published private(set) var messages: [String] = []
     @Published private(set) var bodyCount = 0
+    /// 保持している断面表示(部品と一緒に保存する。元に戻すの対象外)
+    @Published private(set) var savedSection: SectionView?
     /// いまの形のソリッド(断面表示に使う)
     private(set) var solid = Solid.empty
 
@@ -35,12 +37,15 @@ final class ModelStore: ObservableObject {
     var canRedo: Bool { !redoStack.isEmpty }
 
     init() {
-        if let data = load() { apply(data) }
+        if let data = load() {
+            apply(data)
+            savedSection = data.section
+        }
         rebuild()
     }
 
     private var snapshot: ModelData {
-        ModelData(partName: partName, features: features, rollbackIndex: rollbackIndex)
+        ModelData(partName: partName, features: features, rollbackIndex: rollbackIndex, section: savedSection)
     }
 
     private func apply(_ d: ModelData) {
@@ -143,6 +148,12 @@ final class ModelStore: ObservableObject {
         change { d in
             d.rollbackIndex = id.flatMap { id in d.features.firstIndex { $0.id == id } }
         }
+    }
+
+    /// 断面表示の状態を保存する
+    func saveSection(_ s: SectionView?) {
+        savedSection = s
+        save()
     }
 
     func newPart() {
