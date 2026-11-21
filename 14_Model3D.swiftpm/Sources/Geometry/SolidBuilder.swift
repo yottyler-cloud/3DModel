@@ -28,20 +28,23 @@ enum SolidBuilder {
                 let t = max(f.filletRadius, 0.01)
                 var done2: [Solid]?
                 var lastMessages: [String] = []
+                var why = ""
                 for tt in [t, t + 0.0013, t - 0.0011, t + 0.0031] where tt > 0 {
                     var msgs: [String] = []
                     let pieces = shellInner(done, thickness: tt, open: f.filletEdges, messages: &msgs)
                     lastMessages = msgs
-                    if let r = shell(bodies, pieces: pieces, thickness: tt) {
-                        done2 = r
+                    let r = shell(bodies, pieces: pieces, thickness: tt)
+                    if let ok = r.bodies {
+                        done2 = ok
                         break
                     }
+                    if why.isEmpty { why = r.reason }
                 }
                 messages += lastMessages
                 if let r = done2 {
                     bodies = r
                 } else {
-                    messages.append("「\(f.name)」: シェルを計算できませんでした(厚みや開口を変えてみてください)")
+                    messages.append("「\(f.name)」: シェルを計算できませんでした [\(why)]")
                 }
                 continue
             }
@@ -389,11 +392,17 @@ enum SolidBuilder {
     /// (押し出し・回転は縮め、カットは広げる)。開口に選んだ面は外まで抜く
     /// くり抜く形でボディをくり抜く。結果の外形が元と変わってしまったら(計算の失敗)、
     /// 1つずつくり抜く方法でやり直し、それでもだめなら元の形のままにする
-    static func shell(_ bodies: [Solid], pieces: [(Solid, Bool)], thickness t: Double) -> [Solid]? {
+    static func shell(_ bodies: [Solid], pieces: [(Solid, Bool)], thickness t: Double) -> (bodies: [Solid]?, reason: String) {
         func union(_ ps: [(Solid, Bool)]) -> Solid {
             var s = Solid.empty
             for (p, add) in ps { s = add ? s.union(p) : s.subtract(p) }
             return s
+        }
+        // 失敗したときの数値(原因を調べるため)
+        func describe(_ before: Solid, _ after: Solid) -> String {
+            func f(_ v: Double) -> String { String(format: "%.1f", v) }
+            let a = before.bounds.size, b = after.bounds.size
+            return "部品\(pieces.count) 内\(f(union(pieces).volume)) 前\(f(a.x))×\(f(a.y))×\(f(a.z)) V\(f(before.volume)) 後\(f(b.x))×\(f(b.y))×\(f(b.z)) V\(f(after.volume)) 面\(after.polygons.count)"
         }
         func plausible(_ before: Solid, _ after: Solid) -> Bool {
             guard !after.isEmpty else { return false }
@@ -418,10 +427,10 @@ enum SolidBuilder {
             if plausible(body, r2) {
                 out.append(r2)
             } else {
-                return nil
+                return (nil, describe(body, r1))
             }
         }
-        return out.filter { !$0.isEmpty }
+        return (out.filter { !$0.isEmpty }, "")
     }
 
     /// シェルでくり抜く形(足す形と、そこから除く形の並び)

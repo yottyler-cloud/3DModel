@@ -1,7 +1,9 @@
 # 3DModel
 3Dモデリングのソフト
 
-## Model3D.swiftpm(iPad / Swift Playgrounds)
+## NN_Model3D.swiftpm(iPad / Swift Playgrounds)
+
+フォルダ名の先頭の NN はバージョン番号です(変更履歴は CHANGELOG.md)。
 
 2次元のスケッチ(図面)をもとに立体をつくる、履歴型の3Dモデラーの基本形です。
 
@@ -25,7 +27,7 @@
 - STL(バイナリ)書き出し、自動保存(書類フォルダの part.json)。起動時は空の部品から始まる
 
 ### 開き方
-`Model3D.swiftpm` フォルダを iPad の Swift Playgrounds(または Mac の Xcode)で開いて実行します。
+`NN_Model3D.swiftpm` フォルダ(NN はバージョン)を iPad の Swift Playgrounds(または Mac の Xcode)で開いて実行します。
 
 ### 中身
 | フォルダ | 内容 |
