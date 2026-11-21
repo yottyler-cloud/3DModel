@@ -116,6 +116,16 @@ struct CommandBar: View {
                 CommandButton(title: "やり直し", symbol: "arrow.uturn.forward") { store.redo() }
                     .disabled(!store.canRedo || editor.session != nil)
             }
+            if let url = editor.dataURL, editor.sketch == nil {
+                ShareLink(item: url) {
+                    VStack(spacing: 2) {
+                        Image(systemName: "doc.text").font(.system(size: 16)).frame(height: 20)
+                        Text("データ").font(.system(size: 10))
+                    }
+                    .frame(width: 48, height: 42)
+                }
+                .foregroundStyle(Color.primary)
+            }
             if let url = editor.exportURL, editor.sketch == nil {
                 ShareLink(item: url) {
                     VStack(spacing: 3) {

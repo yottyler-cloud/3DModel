@@ -80,6 +80,7 @@ final class Editor: ObservableObject {
     @Published var expanded: Set<UUID> = []
     @Published var toast: String?
     @Published var exportURL: URL?
+    @Published var dataURL: URL?
 
     init(store: ModelStore) {
         self.store = store
@@ -668,6 +669,7 @@ final class Editor: ObservableObject {
 
     func refreshExport() {
         exportURL = try? STLExporter.writeTemporary(store.mesh, name: store.partName)
+        dataURL = store.exportData()
     }
 }
 

@@ -211,6 +211,15 @@ final class ModelStore: ObservableObject {
         }
     }
 
+    /// モデルのデータ(JSON)を共有用に書き出す
+    func exportData() -> URL? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(partName)_data.json")
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? enc.encode(snapshot), (try? data.write(to: url, options: .atomic)) != nil else { return nil }
+        return url
+    }
+
     private func load() -> ModelData? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? JSONDecoder().decode(ModelData.self, from: data)
